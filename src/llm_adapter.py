@@ -218,78 +218,204 @@ class DemoModeAdapter(BaseLLMAdapter):
     def generate_structured(self, question: str, schema_prompt: str, error_feedback: Optional[str] = None) -> LLMOutput:
         q_lower = question.lower().strip()
 
-        # Check for ambiguity in demo mode
-        if q_lower in ["show best", "the best", "best", "what is the best"]:
-            return LLMOutput(
-                sql=None,
-                explanation="The request for 'the best' is underspecified without a target metric.",
-                assumptions=[],
-                needs_clarification=True,
-                clarification_question="What criteria would you like to use for 'best'?",
-                clarification_options=[
-                    "Top products by average customer rating",
-                    "Top products by total sales revenue",
-                    "Top customers by total spending",
-                    "Top categories by product count"
-                ]
-            )
+        # Parse tables and columns from schema_prompt
+        parsed_tables = self._parse_schema_tables(schema_prompt)
+        is_sample_business_db = bool(parsed_tables and {"customers", "orders", "products"}.intersection(set(parsed_tables.keys())))
 
-        if q_lower in ["sales", "show sales", "orders", "show orders"]:
-            return LLMOutput(
-                sql=None,
-                explanation="The query for 'sales' does not specify dimensions, aggregation, or timeframe.",
-                assumptions=[],
-                needs_clarification=True,
-                clarification_question="Which sales breakdown would you like to see?",
-                clarification_options=[
-                    "Total revenue and order count grouped by order status",
-                    "Monthly sales trends over time",
-                    "Sales volume by destination city",
-                    "Top 5 customers by total spending"
-                ]
-            )
+        # If this is the sample business DB, use Stage 2 deterministic logic
+        if is_sample_business_db or not parsed_tables:
+            # Check for ambiguity in demo mode
+            if q_lower in ["show best", "the best", "best", "what is the best"]:
+                return LLMOutput(
+                    sql=None,
+                    explanation="The request for 'the best' is underspecified without a target metric.",
+                    assumptions=[],
+                    needs_clarification=True,
+                    clarification_question="What criteria would you like to use for 'best'?",
+                    clarification_options=[
+                        "Top products by average customer rating",
+                        "Top products by total sales revenue",
+                        "Top customers by total spending",
+                        "Top categories by product count"
+                    ]
+                )
 
-        # If this is a correction retry and previous error was given
-        if error_feedback:
+            if q_lower in ["sales", "show sales", "orders", "show orders"]:
+                return LLMOutput(
+                    sql=None,
+                    explanation="The query for 'sales' does not specify dimensions, aggregation, or timeframe.",
+                    assumptions=[],
+                    needs_clarification=True,
+                    clarification_question="Which sales breakdown would you like to see?",
+                    clarification_options=[
+                        "Total revenue and order count grouped by order status",
+                        "Monthly sales trends over time",
+                        "Sales volume by destination city",
+                        "Top 5 customers by total spending"
+                    ]
+                )
+
+            # If this is a correction retry and previous error was given
+            if error_feedback:
+                for item in self.DETERMINISTIC_QUERIES:
+                    if any(p in q_lower for p in item["patterns"]):
+                        return LLMOutput(
+                            sql=item["sql"],
+                            explanation=f"Corrected query after resolving: {error_feedback[:100]}",
+                            assumptions=item["assumptions"]
+                        )
+                return LLMOutput(
+                    sql="SELECT id, name, email, loyalty_tier FROM customers ORDER BY id LIMIT 10",
+                    explanation="Fallback safe customer directory query following error correction.",
+                    assumptions=["Returning top 10 customers"]
+                )
+
+            # Match against deterministic catalogue - pick highest scoring match
+            best_item = None
+            best_score = 0
             for item in self.DETERMINISTIC_QUERIES:
-                if any(p in q_lower for p in item["patterns"]):
-                    return LLMOutput(
-                        sql=item["sql"],
-                        explanation=f"Corrected query after resolving: {error_feedback[:100]}",
-                        assumptions=item["assumptions"]
-                    )
+                score = 0
+                for p in item["patterns"]:
+                    if p in q_lower:
+                        score += len(p) + (10 if " " in p else 2)
+                if score > best_score:
+                    best_score = score
+                    best_item = item
+
+            if best_item and best_score >= 2:
+                return LLMOutput(
+                    sql=best_item["sql"],
+                    explanation=best_item["explanation"],
+                    assumptions=best_item["assumptions"]
+                )
+
+            # Default safe exploratory query for sample business DB
             return LLMOutput(
-                sql="SELECT id, name, email, loyalty_tier FROM customers ORDER BY id LIMIT 10",
-                explanation="Fallback safe customer directory query following error correction.",
-                assumptions=["Returning top 10 customers"]
+                sql="SELECT id, name, category, price, stock_quantity, rating FROM products ORDER BY price DESC LIMIT 10",
+                explanation="Displaying the top 10 highest-priced products with current stock levels and ratings.",
+                assumptions=["Sorted by price in descending order"]
             )
 
-        # Match against deterministic catalogue - pick highest scoring match
-        best_item = None
-        best_score = 0
-        for item in self.DETERMINISTIC_QUERIES:
-            score = 0
-            for p in item["patterns"]:
-                if p in q_lower:
-                    score += len(p) + (10 if " " in p else 2)
-            if score > best_score:
-                best_score = score
-                best_item = item
+        # -------------------------------------------------------------
+        # Uploaded Dataset / Multi-Domain Dynamic Demo Mode Generation
+        # -------------------------------------------------------------
+        primary_table = list(parsed_tables.keys())[0]
+        tbl_columns = parsed_tables[primary_table]
+        col_names = [c["name"] for c in tbl_columns]
 
-        if best_item and best_score >= 2:
+        # Classify columns
+        numeric_cols = [
+            c["name"] for c in tbl_columns
+            if any(t in c["type"].upper() for t in ["INT", "FLOAT", "REAL", "NUMERIC", "DECIMAL", "DOUBLE"])
+            and not c["name"].lower().endswith("id")
+        ]
+        categorical_cols = [c["name"] for c in tbl_columns if c["name"] not in numeric_cols]
+
+        # 1. Error retry fallback
+        if error_feedback:
+            safe_cols = ", ".join(f"[{c}]" for c in col_names[:5])
             return LLMOutput(
-                sql=best_item["sql"],
-                explanation=best_item["explanation"],
-                assumptions=best_item["assumptions"]
+                sql=f"SELECT {safe_cols} FROM [{primary_table}] LIMIT 10",
+                explanation=f"[Demo Mode] Corrected query for table '{primary_table}' after resolving error.",
+                assumptions=["Safe exploratory fallback query"]
             )
 
+        # 2. Total record count inquiry
+        if any(w in q_lower for w in ["count", "how many", "total records", "number of rows", "number of records"]):
+            return LLMOutput(
+                sql=f"SELECT COUNT(*) AS total_records FROM [{primary_table}]",
+                explanation=f"[Demo Mode] Calculates total record count in table '{primary_table}'.",
+                assumptions=["Count of all available records"]
+            )
 
-        # Default safe exploratory query
+        # 3. Average / Mean calculation
+        if any(w in q_lower for w in ["average", "avg", "mean"]) and numeric_cols:
+            num = numeric_cols[0]
+            return LLMOutput(
+                sql=f"SELECT ROUND(AVG([{num}]), 2) AS average_{num} FROM [{primary_table}]",
+                explanation=f"[Demo Mode] Calculates average {num} across table '{primary_table}'.",
+                assumptions=[f"Computed average of numeric column '{num}'"]
+            )
+
+        # 4. Top-N / Highest inquiry
+        if any(w in q_lower for w in ["top", "highest", "most", "maximum", "best"]) and numeric_cols:
+            num = numeric_cols[0]
+            safe_cols = ", ".join(f"[{c}]" for c in col_names[:6])
+            return LLMOutput(
+                sql=f"SELECT {safe_cols} FROM [{primary_table}] ORDER BY [{num}] DESC LIMIT 5",
+                explanation=f"[Demo Mode] Retrieves top 5 records from '{primary_table}' sorted by '{num}' descending.",
+                assumptions=[f"Ranked by '{num}' in descending order", "Limited to top 5 records"]
+            )
+
+        # 5. Lowest / Minimum inquiry
+        if any(w in q_lower for w in ["lowest", "least", "minimum", "bottom"]) and numeric_cols:
+            num = numeric_cols[0]
+            safe_cols = ", ".join(f"[{c}]" for c in col_names[:6])
+            return LLMOutput(
+                sql=f"SELECT {safe_cols} FROM [{primary_table}] ORDER BY [{num}] ASC LIMIT 5",
+                explanation=f"[Demo Mode] Retrieves lowest 5 records from '{primary_table}' sorted by '{num}' ascending.",
+                assumptions=[f"Ranked by '{num}' in ascending order", "Limited to bottom 5 records"]
+            )
+
+        # 6. Check if specific columns are mentioned in user question
+        mentioned_cols = [c for c in col_names if c.lower() in q_lower or c.lower().replace("_", " ") in q_lower]
+        if mentioned_cols:
+            mentioned_num = [c for c in mentioned_cols if c in numeric_cols]
+            mentioned_cat = [c for c in mentioned_cols if c in categorical_cols]
+
+            if mentioned_num and mentioned_cat:
+                cat_c = mentioned_cat[0]
+                num_c = mentioned_num[0]
+                return LLMOutput(
+                    sql=(
+                        f"SELECT [{cat_c}], ROUND(SUM([{num_c}]), 2) AS total_{num_c} "
+                        f"FROM [{primary_table}] "
+                        f"GROUP BY [{cat_c}] "
+                        f"ORDER BY total_{num_c} DESC LIMIT 10"
+                    ),
+                    explanation=f"[Demo Mode] Aggregates total {num_c} grouped by {cat_c} from '{primary_table}'.",
+                    assumptions=[f"Grouped by '{cat_c}'", f"Aggregated by SUM({num_c})"]
+                )
+            else:
+                selected_cols = ", ".join(f"[{c}]" for c in mentioned_cols[:6])
+                return LLMOutput(
+                    sql=f"SELECT {selected_cols} FROM [{primary_table}] LIMIT 10",
+                    explanation=f"[Demo Mode] Queries user-specified columns from '{primary_table}'.",
+                    assumptions=["Previewing top 10 records"]
+                )
+
+        # 7. Default exploratory query for uploaded dataset
+        safe_cols = ", ".join(f"[{c}]" for c in col_names[:6])
         return LLMOutput(
-            sql="SELECT id, name, category, price, stock_quantity, rating FROM products ORDER BY price DESC LIMIT 10",
-            explanation="Displaying the top 10 highest-priced products with current stock levels and ratings.",
-            assumptions=["Sorted by price in descending order"]
+            sql=f"SELECT {safe_cols} FROM [{primary_table}] LIMIT 10",
+            explanation=f"[Demo Mode] Displaying exploratory sample records from table '{primary_table}'.",
+            assumptions=["Read-only exploratory query", "Limited to 10 rows"]
         )
+
+    def _parse_schema_tables(self, schema_prompt: str) -> Dict[str, List[Dict[str, str]]]:
+        """Parses table definitions and column details from the schema prompt string."""
+        tables: Dict[str, List[Dict[str, str]]] = {}
+        current_table = None
+
+        for line in schema_prompt.splitlines():
+            line_s = line.strip()
+            # Match TABLE `name` or TABLE name
+            m_tbl = re.match(r"^TABLE\s+`?([a-zA-Z0-9_]+)`?", line_s)
+            if m_tbl:
+                current_table = m_tbl.group(1)
+                tables[current_table] = []
+                continue
+
+            if current_table and line_s.startswith("-"):
+                # Match - `col_name` (TYPE)
+                m_col = re.match(r"^-\s+`?([a-zA-Z0-9_]+)`?\s+\(([^)]+)\)", line_s)
+                if m_col:
+                    tables[current_table].append({
+                        "name": m_col.group(1),
+                        "type": m_col.group(2).strip()
+                    })
+
+        return tables
 
     def generate_sql(self, question: str, schema_prompt: str, error_feedback: Optional[str] = None) -> str:
         structured = self.generate_structured(question, schema_prompt, error_feedback)

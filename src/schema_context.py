@@ -27,7 +27,6 @@ class SchemaContextBuilder:
         summary = self.db_manager.get_schema_summary()
         tables_dict = {tbl["table_name"]: tbl for tbl in summary["tables"]}
 
-        # Query categorical enumerations and stats from live read-only connection
         categorical_values: Dict[str, List[str]] = {}
         date_ranges: Dict[str, Dict[str, str]] = {}
         
@@ -35,68 +34,121 @@ class SchemaContextBuilder:
         try:
             cur = conn.cursor()
 
-            # Customers: loyalty_tier, country
-            try:
-                cur.execute("SELECT DISTINCT loyalty_tier FROM customers WHERE loyalty_tier IS NOT NULL ORDER BY loyalty_tier;")
-                categorical_values["customers.loyalty_tier"] = [r[0] for r in cur.fetchall()]
-                cur.execute("SELECT DISTINCT country FROM customers WHERE country IS NOT NULL ORDER BY country LIMIT 10;")
-                categorical_values["customers.country"] = [r[0] for r in cur.fetchall()]
-            except Exception:
-                pass
+            # 1. Check for standard business.db tables if present
+            if "customers" in tables_dict:
+                try:
+                    cur.execute("SELECT DISTINCT loyalty_tier FROM customers WHERE loyalty_tier IS NOT NULL ORDER BY loyalty_tier;")
+                    categorical_values["customers.loyalty_tier"] = [r[0] for r in cur.fetchall()]
+                    cur.execute("SELECT DISTINCT country FROM customers WHERE country IS NOT NULL ORDER BY country LIMIT 10;")
+                    categorical_values["customers.country"] = [r[0] for r in cur.fetchall()]
+                except Exception:
+                    pass
 
-            # Orders: status, payment_method, order_date range
-            try:
-                cur.execute("SELECT DISTINCT status FROM orders WHERE status IS NOT NULL ORDER BY status;")
-                categorical_values["orders.status"] = [r[0] for r in cur.fetchall()]
-                cur.execute("SELECT DISTINCT payment_method FROM orders WHERE payment_method IS NOT NULL ORDER BY payment_method;")
-                categorical_values["orders.payment_method"] = [r[0] for r in cur.fetchall()]
-                cur.execute("SELECT MIN(order_date), MAX(order_date) FROM orders;")
-                min_dt, max_dt = cur.fetchone()
-                date_ranges["orders.order_date"] = {"min": str(min_dt), "max": str(max_dt)}
-            except Exception:
-                pass
+            if "orders" in tables_dict:
+                try:
+                    cur.execute("SELECT DISTINCT status FROM orders WHERE status IS NOT NULL ORDER BY status;")
+                    categorical_values["orders.status"] = [r[0] for r in cur.fetchall()]
+                    cur.execute("SELECT DISTINCT payment_method FROM orders WHERE payment_method IS NOT NULL ORDER BY payment_method;")
+                    categorical_values["orders.payment_method"] = [r[0] for r in cur.fetchall()]
+                    cur.execute("SELECT MIN(order_date), MAX(order_date) FROM orders;")
+                    min_dt, max_dt = cur.fetchone()
+                    date_ranges["orders.order_date"] = {"min": str(min_dt), "max": str(max_dt)}
+                except Exception:
+                    pass
 
-            # Products: category, price range
-            try:
-                cur.execute("SELECT DISTINCT category FROM products WHERE category IS NOT NULL ORDER BY category;")
-                categorical_values["products.category"] = [r[0] for r in cur.fetchall()]
-            except Exception:
-                pass
+            if "products" in tables_dict:
+                try:
+                    cur.execute("SELECT DISTINCT category FROM products WHERE category IS NOT NULL ORDER BY category;")
+                    categorical_values["products.category"] = [r[0] for r in cur.fetchall()]
+                except Exception:
+                    pass
+
+            # 2. Dynamic inspection for any uploaded or non-standard tables
+            for tbl in summary["tables"]:
+                tbl_name = tbl["table_name"]
+                for col in tbl["columns"]:
+                    col_name = col["name"]
+                    col_type = col.get("type", "").upper()
+                    full_col_key = f"{tbl_name}.{col_name}"
+
+                    # Detect text categories if not already populated
+                    if full_col_key not in categorical_values:
+                        if any(t in col_type for t in ["VARCHAR", "TEXT", "CHAR", "STRING"]) and not col_name.lower().endswith("id"):
+                            try:
+                                cur.execute(f"SELECT DISTINCT [{col_name}] FROM [{tbl_name}] WHERE [{col_name}] IS NOT NULL LIMIT 12;")
+                                vals = [str(r[0]) for r in cur.fetchall()]
+                                if vals and len(vals) <= 10:
+                                    categorical_values[full_col_key] = vals
+                            except Exception:
+                                pass
+
+                    # Detect date ranges if not already populated
+                    if full_col_key not in date_ranges:
+                        if any(t in col_type for t in ["DATE", "TIME"]) or "date" in col_name.lower() or "time" in col_name.lower():
+                            try:
+                                cur.execute(f"SELECT MIN([{col_name}]), MAX([{col_name}]) FROM [{tbl_name}] WHERE [{col_name}] IS NOT NULL;")
+                                row = cur.fetchone()
+                                if row and row[0] is not None and row[1] is not None:
+                                    date_ranges[full_col_key] = {"min": str(row[0]), "max": str(row[1])}
+                            except Exception:
+                                pass
         finally:
             conn.close()
 
+        # Build relationships and join paths
+        is_sample_business_db = {"customers", "orders", "order_items", "products"}.issubset(set(tables_dict.keys()))
 
-        relationships = [
-            {
-                "from_table": "orders",
-                "from_column": "customer_id",
-                "to_table": "customers",
-                "to_column": "id",
-                "description": "Each Order is placed by one Customer"
-            },
-            {
-                "from_table": "order_items",
-                "from_column": "order_id",
-                "to_table": "orders",
-                "to_column": "id",
-                "description": "Each OrderItem belongs to one Order"
-            },
-            {
-                "from_table": "order_items",
-                "from_column": "product_id",
-                "to_table": "products",
-                "to_column": "id",
-                "description": "Each OrderItem references one Product"
+        if is_sample_business_db:
+            relationships = [
+                {
+                    "from_table": "orders",
+                    "from_column": "customer_id",
+                    "to_table": "customers",
+                    "to_column": "id",
+                    "description": "Each Order is placed by one Customer"
+                },
+                {
+                    "from_table": "order_items",
+                    "from_column": "order_id",
+                    "to_table": "orders",
+                    "to_column": "id",
+                    "description": "Each OrderItem belongs to one Order"
+                },
+                {
+                    "from_table": "order_items",
+                    "from_column": "product_id",
+                    "to_table": "products",
+                    "to_column": "id",
+                    "description": "Each OrderItem references one Product"
+                }
+            ]
+            join_paths = {
+                ("customers", "orders"): "customers c JOIN orders o ON c.id = o.customer_id",
+                ("orders", "order_items"): "orders o JOIN order_items oi ON o.id = oi.order_id",
+                ("order_items", "products"): "order_items oi JOIN products p ON oi.product_id = p.id",
+                ("orders", "products"): "orders o JOIN order_items oi ON o.id = oi.order_id JOIN products p ON oi.product_id = p.id",
+                ("customers", "products"): "customers c JOIN orders o ON c.id = o.customer_id JOIN order_items oi ON o.id = oi.order_id JOIN products p ON oi.product_id = p.id"
             }
-        ]
-
-        join_paths = {
-            ("customers", "orders"): "customers c JOIN orders o ON c.id = o.customer_id",
-            ("orders", "order_items"): "orders o JOIN order_items oi ON o.id = oi.order_id",
-            ("order_items", "products"): "order_items oi JOIN products p ON oi.product_id = p.id",
-            ("orders", "products"): "orders o JOIN order_items oi ON o.id = oi.order_id JOIN products p ON oi.product_id = p.id",
-            ("customers", "products"): "customers c JOIN orders o ON c.id = o.customer_id JOIN order_items oi ON o.id = oi.order_id JOIN products p ON oi.product_id = p.id"
-        }
+        else:
+            # Dynamically infer foreign key relationships from database schema
+            relationships = []
+            join_paths = {}
+            for tbl in summary["tables"]:
+                for fk in tbl.get("foreign_keys", []):
+                    ref_tbl = fk.get("referred_table")
+                    constrained = fk.get("constrained_columns", [])
+                    referred = fk.get("referred_columns", [])
+                    if ref_tbl and constrained and referred:
+                        c_col = constrained[0]
+                        r_col = referred[0]
+                        relationships.append({
+                            "from_table": tbl["table_name"],
+                            "from_column": c_col,
+                            "to_table": ref_tbl,
+                            "to_column": r_col,
+                            "description": f"`{tbl['table_name']}.{c_col}` references `{ref_tbl}.{r_col}`"
+                        })
+                        join_paths[(tbl["table_name"], ref_tbl)] = f"{tbl['table_name']} JOIN {ref_tbl} ON {tbl['table_name']}.{c_col} = {ref_tbl}.{r_col}"
 
         self._cached_schema = {
             "tables": tables_dict,
@@ -112,10 +164,14 @@ class SchemaContextBuilder:
         Builds a comprehensive, schema-aware system prompt context
         incorporating schema definitions, relationships, join guides, and value dictionaries.
         """
+        import os
         schema = self.get_full_schema()
+        db_name = os.path.basename(getattr(self.db_manager, "db_path", "database.db"))
+        table_count = len(schema["tables"])
+
         lines = [
-            "### DATABASE SCHEMA (SQLite 3 - business.db)",
-            "You have access to the following 4 relational tables:",
+            f"### DATABASE SCHEMA (SQLite 3 - {db_name})",
+            f"You have access to the following {table_count} relational table(s):",
             ""
         ]
 
@@ -124,39 +180,49 @@ class SchemaContextBuilder:
             cols = tbl_info["columns"]
             lines.append(f"TABLE `{tbl_name}` (~{tbl_info['row_count']} rows):")
             for c in cols:
-                pk_flag = " [PRIMARY KEY]" if c["primary_key"] else ""
-                lines.append(f"  - `{c['name']}` ({c['type']}){pk_flag}")
+                pk_flag = " [PRIMARY KEY]" if c.get("primary_key") else ""
+                lines.append(f"  - `{c['name']}` ({c.get('type', 'TEXT')}){pk_flag}")
             lines.append("")
 
         # Foreign Key Relationships & JOIN Rules
-        lines.append("### FOREIGN KEY RELATIONSHIPS & JOIN PATHS:")
-        for rel in schema["relationships"]:
-            lines.append(f"- `{rel['from_table']}.{rel['from_column']}` -> `{rel['to_table']}.{rel['to_column']}` ({rel['description']})")
-        lines.append("")
-        lines.append("Standard Multi-Table JOIN Patterns:")
-        lines.append("- Customers with Orders: `FROM customers c JOIN orders o ON c.id = o.customer_id`")
-        lines.append("- Orders with Items and Products: `FROM orders o JOIN order_items oi ON o.id = oi.order_id JOIN products p ON oi.product_id = p.id`")
-        lines.append("- Full Customer Purchase History: `FROM customers c JOIN orders o ON c.id = o.customer_id JOIN order_items oi ON o.id = oi.order_id JOIN products p ON oi.product_id = p.id`")
-        lines.append("")
+        if schema["relationships"]:
+            lines.append("### FOREIGN KEY RELATIONSHIPS & JOIN PATHS:")
+            for rel in schema["relationships"]:
+                lines.append(f"- `{rel['from_table']}.{rel['from_column']}` -> `{rel['to_table']}.{rel['to_column']}` ({rel['description']})")
+            lines.append("")
+            if schema["join_paths"]:
+                lines.append("Standard Multi-Table JOIN Patterns:")
+                for (t1, t2), pattern in schema["join_paths"].items():
+                    lines.append(f"- {t1} with {t2}: `FROM {pattern}`")
+                lines.append("")
+        elif table_count == 1:
+            lines.append("### DATASET TYPE: SINGLE-TABLE")
+            lines.append("- All analytical queries should target this single table without JOINs.")
+            lines.append("")
 
         # Categorical Values Dictionary
-        lines.append("### EXACT CATEGORICAL VALUES (Use exact string literals):")
-        for k, vals in schema["categorical_values"].items():
-            lines.append(f"- `{k}`: {vals}")
+        if schema["categorical_values"]:
+            lines.append("### EXACT CATEGORICAL VALUES (Use exact string literals):")
+            for k, vals in schema["categorical_values"].items():
+                lines.append(f"- `{k}`: {vals}")
+            lines.append("")
+
         if schema["date_ranges"]:
+            lines.append("### DATE RANGES:")
             for k, rng in schema["date_ranges"].items():
                 lines.append(f"- `{k}` range: {rng['min']} to {rng['max']}")
-        lines.append("")
+            lines.append("")
 
         # SQLite Dialect Best Practices
         lines.append("### SQLITE 3 DIALECT RULES:")
         lines.append("1. Read-Only: Use ONLY `SELECT` or `WITH ... SELECT` queries.")
-        lines.append("2. Date Operations: Use `strftime('%Y-%m', order_date)` for monthly grouping or `date(order_date)` for comparisons.")
-        lines.append("3. Aggregations & Rounding: Use `ROUND(SUM(total_amount), 2)` or `ROUND(AVG(price), 2)`.")
+        lines.append("2. Column quoting: Use brackets `[column]` or standard identifiers.")
+        lines.append("3. Aggregations & Rounding: Use `ROUND(SUM(col), 2)` or `ROUND(AVG(col), 2)`.")
         lines.append("4. Grouping & Filtering: Always include non-aggregated selected columns in `GROUP BY`. Use `HAVING` for aggregated filters.")
         lines.append("5. Top-N: Always pair `ORDER BY` with `LIMIT N` when asked for top, highest, or lowest items.")
 
         return "\n".join(lines)
+
 
     def validate_schema_references(self, sql: str) -> Tuple[bool, Optional[str]]:
         """
@@ -225,8 +291,16 @@ class SchemaContextBuilder:
         """
         q = question.strip().lower()
 
-        # 1. "Show best" or "what is the best" without defining metric
-        if re.search(r"\b(best|top|greatest)\b", q) and not any(k in q for k in ["spending", "spend", "sales", "revenue", "order", "rating", "rated", "customer", "price", "stock", "margin", "discount"]):
+        # Check if the query specifies an exact column from the active schema
+        schema = self.get_full_schema()
+        all_cols = []
+        for tbl in schema.get("tables", {}).values():
+            all_cols.extend([c["name"].lower() for c in tbl.get("columns", [])])
+
+        column_mentioned = any(c in q or c.replace("_", " ") in q for c in all_cols if len(c) > 2)
+
+        # 1. "Show best" or "what is the best" without defining metric or column
+        if re.search(r"\b(best|top|greatest)\b", q) and not column_mentioned and not any(k in q for k in ["spending", "spend", "sales", "revenue", "order", "rating", "rated", "customer", "price", "stock", "margin", "discount", "salary", "amount", "total"]):
             return (
                 True,
                 "Your request for 'the best' is ambiguous. Which business dimension would you like to evaluate?",
@@ -264,3 +338,4 @@ class SchemaContextBuilder:
             )
 
         return (False, None, [])
+

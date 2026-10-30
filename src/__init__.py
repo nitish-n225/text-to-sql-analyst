@@ -16,6 +16,15 @@ from src.llm_adapter import (
 )
 from src.pipeline import TextToSqlPipeline, PipelineResult, AttemptRecord, sanitize_error_context
 from src.logger import observability, DiagnosticEvent
+from src.upload_handler import (
+    validate_file_upload,
+    create_temp_db_from_csv,
+    create_temp_db_from_sqlite,
+    cleanup_temp_database,
+    sanitize_table_name,
+    sanitize_column_names,
+    MAX_UPLOAD_SIZE_BYTES
+)
 
 __all__ = [
     "DatabaseManager",
@@ -34,5 +43,12 @@ __all__ = [
     "AttemptRecord",
     "sanitize_error_context",
     "observability",
-    "DiagnosticEvent"
+    "DiagnosticEvent",
+    "validate_file_upload",
+    "create_temp_db_from_csv",
+    "create_temp_db_from_sqlite",
+    "cleanup_temp_database",
+    "sanitize_table_name",
+    "sanitize_column_names",
+    "MAX_UPLOAD_SIZE_BYTES"
 ]

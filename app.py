@@ -37,18 +37,40 @@ from src.llm_adapter import (
 )
 from src.pipeline import TextToSqlPipeline, PipelineResult
 from src.logger import observability
+from src.upload_handler import (
+    validate_file_upload,
+    create_temp_db_from_csv,
+    create_temp_db_from_sqlite,
+    cleanup_temp_database,
+    MAX_UPLOAD_SIZE_BYTES
+)
 
 # Streamlit Page Setup
 st.set_page_config(
-    page_title="Text-to-SQL Analyst AI | Stage 2",
+    page_title="Text-to-SQL Analyst AI | Stage 3",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Initialize Session State
+if "sample_db_manager" not in st.session_state:
+    st.session_state.sample_db_manager = seed_sample_database(reset=False)
+
 if "db_manager" not in st.session_state:
-    st.session_state.db_manager = seed_sample_database(reset=False)
+    st.session_state.db_manager = st.session_state.sample_db_manager
+
+if "temp_db_manager" not in st.session_state:
+    st.session_state.temp_db_manager = None
+
+if "data_source_mode" not in st.session_state:
+    st.session_state.data_source_mode = "sample"
+
+if "uploaded_source_name" not in st.session_state:
+    st.session_state.uploaded_source_name = "business.db"
+
+if "last_uploaded_key" not in st.session_state:
+    st.session_state.last_uploaded_key = None
 
 if "active_question" not in st.session_state:
     st.session_state.active_question = "Show top 5 customers by total spending and order count"
@@ -182,29 +204,134 @@ with st.sidebar:
         help="Intentionally induces a column mismatch error on Attempt 1 to demonstrate error sanitization, AST revalidation, and automatic recovery on Attempt 2."
     )
 
+    # ---------------------------------------------------------
+    # Sidebar: Data Source Selection (Stage 3, Feature 1)
+    # ---------------------------------------------------------
     st.markdown("---")
-    st.markdown("### 📊 Business Database")
+    st.markdown("### 📁 Data Source Selection")
+    
+    source_options = ["sample", "csv", "sqlite"]
+    source_labels = {
+        "sample": "📊 Sample Business DB (Pre-seeded)",
+        "csv": "📄 Upload CSV File (.csv)",
+        "sqlite": "🗄️ Upload SQLite DB (.db, .sqlite)"
+    }
+
+    selected_source = st.radio(
+        "Choose Data Source:",
+        options=source_options,
+        format_func=lambda x: source_labels[x],
+        index=source_options.index(st.session_state.data_source_mode) if st.session_state.data_source_mode in source_options else 0,
+        key="source_selector_radio"
+    )
+
+    if selected_source != st.session_state.data_source_mode:
+        st.session_state.data_source_mode = selected_source
+        if selected_source == "sample":
+            cleanup_temp_database(st.session_state.temp_db_manager)
+            st.session_state.temp_db_manager = None
+            st.session_state.db_manager = st.session_state.sample_db_manager
+            st.session_state.uploaded_source_name = "business.db"
+            st.session_state.active_question = "Show top 5 customers by total spending and order count"
+            st.session_state.last_uploaded_key = None
+            st.rerun()
+
+    # CSV Upload Handler
+    if selected_source == "csv":
+        uploaded_csv = st.file_uploader(
+            "Upload CSV File (Max 25 MB):",
+            type=["csv"],
+            key="csv_file_uploader",
+            help="Uploaded CSV is loaded into an ephemeral temporary SQLite database in memory."
+        )
+        if uploaded_csv is not None:
+            upload_key = f"csv_{uploaded_csv.name}_{uploaded_csv.size}"
+            if st.session_state.last_uploaded_key != upload_key:
+                with st.spinner(f"Ingesting CSV '{uploaded_csv.name}' into sandbox..."):
+                    ok, new_db, tbl_name, err = create_temp_db_from_csv(
+                        uploaded_csv.name,
+                        uploaded_csv.getvalue()
+                    )
+                    if not ok:
+                        st.error(f"❌ Upload Failed: {err}")
+                    else:
+                        cleanup_temp_database(st.session_state.temp_db_manager)
+                        st.session_state.temp_db_manager = new_db
+                        st.session_state.db_manager = new_db
+                        st.session_state.uploaded_source_name = f"{uploaded_csv.name} (table: `{tbl_name}`)"
+                        st.session_state.last_uploaded_key = upload_key
+                        st.session_state.active_question = f"Show top 10 records from {tbl_name}"
+                        st.session_state.last_result = None
+                        st.success(f"✅ Ingested `{uploaded_csv.name}` into table `{tbl_name}`!")
+                        st.rerun()
+
+    # SQLite Upload Handler
+    elif selected_source == "sqlite":
+        uploaded_sqlite = st.file_uploader(
+            "Upload SQLite Database (Max 25 MB):",
+            type=["db", "sqlite", "sqlite3"],
+            key="sqlite_file_uploader",
+            help="Upload an existing SQLite database. Tables and foreign keys will be reflected automatically."
+        )
+        if uploaded_sqlite is not None:
+            upload_key = f"sqlite_{uploaded_sqlite.name}_{uploaded_sqlite.size}"
+            if st.session_state.last_uploaded_key != upload_key:
+                with st.spinner(f"Validating SQLite database '{uploaded_sqlite.name}'..."):
+                    ok, new_db, err = create_temp_db_from_sqlite(
+                        uploaded_sqlite.name,
+                        uploaded_sqlite.getvalue()
+                    )
+                    if not ok:
+                        st.error(f"❌ Upload Failed: {err}")
+                    else:
+                        cleanup_temp_database(st.session_state.temp_db_manager)
+                        st.session_state.temp_db_manager = new_db
+                        st.session_state.db_manager = new_db
+                        st.session_state.uploaded_source_name = uploaded_sqlite.name
+                        st.session_state.last_uploaded_key = upload_key
+                        summary = new_db.get_schema_summary()
+                        first_tbl = summary["tables"][0]["table_name"] if summary["tables"] else "data"
+                        st.session_state.active_question = f"Show top 10 records from {first_tbl}"
+                        st.session_state.last_result = None
+                        st.success(f"✅ Verified SQLite database with {len(summary['tables'])} table(s)!")
+                        st.rerun()
+
+    # Active Database Schema & Stats
+    st.markdown("---")
+    st.markdown("### 📊 Active Database Schema")
+    st.caption(f"Source: **{st.session_state.uploaded_source_name}**")
     db = st.session_state.db_manager
     schema_summary = db.get_schema_summary()
     
     col_a, col_b = st.columns(2)
     for i, tbl in enumerate(schema_summary["tables"]):
         target_col = col_a if i % 2 == 0 else col_b
-        target_col.metric(tbl["table_name"].title(), f"{tbl['row_count']} rows")
+        target_col.metric(tbl["table_name"][:14].title(), f"{tbl['row_count']} rows")
 
-    with st.expander("🔍 Inspect Database Schema"):
+    with st.expander("🔍 Inspect Schema & Sample Records"):
         for tbl in schema_summary["tables"]:
-            st.markdown(f"**Table: `{tbl['table_name']}`**")
+            st.markdown(f"**Table: `{tbl['table_name']}`** (~{tbl['row_count']} rows)")
             cols_df = pd.DataFrame(tbl["columns"])[["name", "type", "primary_key", "nullable"]]
             st.dataframe(cols_df, use_container_width=True, hide_index=True)
             if tbl["sample_rows"]:
-                st.caption("Sample Records:")
+                st.caption(f"Sample records from `{tbl['table_name']}`:")
                 st.dataframe(pd.DataFrame(tbl["sample_rows"]), use_container_width=True, hide_index=True)
 
-    if st.button("🔄 Reset / Re-seed Database"):
-        seed_sample_database(db, reset=True)
-        st.success("Database re-seeded with fresh records!")
-        st.rerun()
+    if st.session_state.data_source_mode == "sample":
+        if st.button("🔄 Reset / Re-seed Database"):
+            seed_sample_database(db, reset=True)
+            st.success("Database re-seeded with fresh records!")
+            st.rerun()
+    else:
+        if st.button("↩️ Switch Back to Sample Business DB"):
+            cleanup_temp_database(st.session_state.temp_db_manager)
+            st.session_state.temp_db_manager = None
+            st.session_state.db_manager = st.session_state.sample_db_manager
+            st.session_state.data_source_mode = "sample"
+            st.session_state.uploaded_source_name = "business.db"
+            st.session_state.active_question = "Show top 5 customers by total spending and order count"
+            st.session_state.last_uploaded_key = None
+            st.rerun()
 
     with st.expander("📝 Observability & Diagnostic Logs"):
         events = observability.get_events(limit=25)
@@ -218,7 +345,7 @@ with st.sidebar:
 # Main Panel: Natural Language Analyst
 # ---------------------------------------------------------
 st.markdown('<div class="main-title">Text-to-SQL Analyst AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Stage 2: Schema-Aware Intelligence &bull; Structured Explanations &bull; Ambiguity Clarification &bull; Bounded Self-Healing</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Stage 3: Multi-Domain Database &bull; CSV Upload &bull; AST Safety &bull; Bounded Self-Healing</div>', unsafe_allow_html=True)
 
 # Provider status badge
 if selected_provider_key == "demo" or not providers_info[selected_provider_key]["available"]:
@@ -236,21 +363,52 @@ else:
     """, unsafe_allow_html=True)
     active_adapter = create_llm_adapter(selected_provider_key)
 
-# Sample Query Chips (including Stage 2 multi-table and date filter queries)
+# Dynamic Example Questions based on Active Dataset
 st.markdown("##### 💡 Example Analytical Questions:")
-sample_queries = [
-    ("Top Spenders", "Show top 5 customers by total spending and order count"),
-    ("Customer Purchases (4-Table JOIN)", "Show customer product purchase history with prices and dates"),
-    ("Monthly Sales Trend", "Show monthly sales trends over time"),
-    ("Repeat Buyers (HAVING)", "Show repeat frequent buyers with more than 3 orders"),
-    ("Category Pricing", "What are the product counts and average prices by category?"),
-    ("Order Status Revenue", "Show order counts and total revenue grouped by order status")
-]
 
-chip_cols = st.columns(len(sample_queries))
-for i, (label, sample_q) in enumerate(sample_queries):
-    if chip_cols[i].button(label, key=f"chip_{i}"):
-        st.session_state.active_question = sample_q
+if st.session_state.data_source_mode == "sample":
+    sample_queries = [
+        ("Top Spenders", "Show top 5 customers by total spending and order count"),
+        ("Customer Purchases (4-Table JOIN)", "Show customer product purchase history with prices and dates"),
+        ("Monthly Sales Trend", "Show monthly sales trends over time"),
+        ("Repeat Buyers (HAVING)", "Show repeat frequent buyers with more than 3 orders"),
+        ("Category Pricing", "What are the product counts and average prices by category?"),
+        ("Order Status Revenue", "Show order counts and total revenue grouped by order status")
+    ]
+else:
+    # Dynamically generate sample queries tailored to the uploaded table(s)
+    curr_summary = st.session_state.db_manager.get_schema_summary()
+    first_tbl_info = curr_summary["tables"][0] if curr_summary["tables"] else None
+    sample_queries = []
+    
+    if first_tbl_info:
+        tbl_n = first_tbl_info["table_name"]
+        cols_list = [c["name"] for c in first_tbl_info["columns"]]
+        num_cols = [
+            c["name"] for c in first_tbl_info["columns"]
+            if any(t in c.get("type", "").upper() for t in ["INT", "FLOAT", "REAL", "NUMERIC", "DECIMAL", "DOUBLE"])
+            and not c["name"].lower().endswith("id")
+        ]
+        cat_cols = [c["name"] for c in first_tbl_info["columns"] if c["name"] not in num_cols and not c["name"].lower().endswith("id")]
+
+        sample_queries.append(("Explore 10 Rows", f"Show top 10 records from {tbl_n}"))
+        sample_queries.append(("Record Count", f"Count total records in {tbl_n}"))
+        
+        if num_cols:
+            sample_queries.append((f"Top by {num_cols[0].title()}", f"Top 5 records by {num_cols[0]}"))
+            sample_queries.append((f"Average {num_cols[0].title()}", f"What is the average {num_cols[0]} in {tbl_n}?"))
+        
+        if cat_cols and num_cols:
+            sample_queries.append((f"Group by {cat_cols[0].title()}", f"Show total {num_cols[0]} grouped by {cat_cols[0]} in {tbl_n}"))
+        elif cat_cols:
+            sample_queries.append((f"Count by {cat_cols[0].title()}", f"Count records grouped by {cat_cols[0]} in {tbl_n}"))
+
+if sample_queries:
+    chip_cols = st.columns(len(sample_queries))
+    for i, (label, sample_q) in enumerate(sample_queries):
+        if chip_cols[i].button(label, key=f"chip_{i}"):
+            st.session_state.active_question = sample_q
+
 
 # Question Input Bar
 user_question = st.text_input(
