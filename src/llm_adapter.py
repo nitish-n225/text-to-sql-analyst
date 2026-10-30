@@ -458,15 +458,24 @@ class GeminiAdapter(BaseLLMAdapter):
     label = "Google Gemini (Live Mode)"
 
     def __init__(self, model_name: Optional[str] = None):
-        self.api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        raw_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if raw_key:
+            self.api_key = raw_key.strip().strip("'\"")
+        else:
+            self.api_key = ""
         if not self.api_key:
             raise ValueError(
-                "Gemini API Key not found. Please set GEMINI_API_KEY in your environment or .env file."
+                "Gemini API Key not found. Please set GEMINI_API_KEY in your environment, Streamlit secrets, or sidebar."
             )
         self.model_name = model_name or os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
     def _call_api(self, prompt: str) -> str:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
+        models_to_try = [self.model_name]
+        for fallback_m in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"]:
+            if fallback_m not in models_to_try:
+                models_to_try.append(fallback_m)
+
+        last_error = None
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -475,17 +484,40 @@ class GeminiAdapter(BaseLLMAdapter):
                 "responseMimeType": "application/json"
             }
         }
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(url, json=payload, headers=headers, timeout=25)
-        
-        if response.status_code != 200:
-            raise RuntimeError(f"Google Gemini API error (HTTP {response.status_code}): {response.text[:200]}")
 
-        data = response.json()
-        try:
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, IndexError) as e:
-            raise RuntimeError(f"Unexpected response structure from Gemini API: {str(e)}")
+        for current_model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent"
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key
+            }
+            try:
+                response = requests.post(url, json=payload, headers=headers, timeout=25)
+                # Fallback to query param if header is not accepted (HTTP 400/401/403)
+                if response.status_code in (400, 401, 403):
+                    url_query = f"{url}?key={self.api_key}"
+                    response = requests.post(url_query, json=payload, headers={"Content-Type": "application/json"}, timeout=25)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                elif response.status_code == 404:
+                    last_error = f"Model {current_model} returned 404 (not found)"
+                    continue
+                else:
+                    from src.logger import redact_sensitive_info
+                    sanitized_body = redact_sensitive_info(response.text[:200])
+                    if self.api_key:
+                        sanitized_body = sanitized_body.replace(self.api_key, "[REDACTED_API_KEY]")
+                    raise RuntimeError(f"Google Gemini API error (HTTP {response.status_code}): {sanitized_body}")
+            except requests.exceptions.RequestException as req_err:
+                from src.logger import redact_sensitive_info
+                msg = redact_sensitive_info(str(req_err))
+                if self.api_key:
+                    msg = msg.replace(self.api_key, "[REDACTED_API_KEY]")
+                raise RuntimeError(f"Google Gemini network error: {msg}")
+
+        raise RuntimeError(f"Google Gemini API error: All tested models failed. Last error: {last_error}")
 
     def generate_structured(self, question: str, schema_prompt: str, error_feedback: Optional[str] = None) -> LLMOutput:
         # Prompt injection defense & data separation
@@ -561,10 +593,14 @@ class OpenAIAdapter(BaseLLMAdapter):
     label = "OpenAI (Live Mode)"
 
     def __init__(self, model_name: Optional[str] = None):
-        self.api_key = os.environ.get("OPENAI_API_KEY")
+        raw_key = os.environ.get("OPENAI_API_KEY")
+        if raw_key:
+            self.api_key = raw_key.strip().strip("'\"")
+        else:
+            self.api_key = ""
         if not self.api_key:
             raise ValueError(
-                "OpenAI API Key not found. Please set OPENAI_API_KEY in your environment or .env file."
+                "OpenAI API Key not found. Please set OPENAI_API_KEY in your environment, Streamlit secrets, or sidebar."
             )
         self.model_name = model_name or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -704,8 +740,10 @@ def get_available_providers() -> Dict[str, Dict[str, Any]]:
     Returns available providers with status flags.
     Never returns or exposes API key values.
     """
-    has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
-    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    has_gemini = bool(gemini_key and gemini_key.strip().strip("'\""))
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    has_openai = bool(openai_key and openai_key.strip().strip("'\""))
 
     return {
         "demo": {

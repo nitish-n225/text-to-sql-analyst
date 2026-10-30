@@ -21,10 +21,30 @@ load_dotenv()
 try:
     if hasattr(st, "secrets"):
         for sec_key, sec_val in st.secrets.items():
-            if isinstance(sec_val, str) and sec_key not in os.environ:
-                os.environ[sec_key] = sec_val
+            if isinstance(sec_val, str):
+                cleaned_val = sec_val.strip().strip("'\"")
+                upper_key = sec_key.upper()
+                os.environ[upper_key] = cleaned_val
+                os.environ[sec_key] = cleaned_val
+                if upper_key in ("GOOGLE_API_KEY", "GEMINI_KEY", "GOOGLE_KEY", "GEMINI", "GOOGLE"):
+                    os.environ["GEMINI_API_KEY"] = cleaned_val
+                elif upper_key in ("OPENAI", "OPENAI_KEY"):
+                    os.environ["OPENAI_API_KEY"] = cleaned_val
+            elif hasattr(sec_val, "items"):
+                for sub_k, sub_v in sec_val.items():
+                    if isinstance(sub_v, str):
+                        cleaned_v = sub_v.strip().strip("'\"")
+                        composite_key = f"{sec_key}_{sub_k}".upper()
+                        os.environ[composite_key] = cleaned_v
+                        if sub_k.upper() in ("API_KEY", "KEY"):
+                            os.environ[f"{sec_key.upper()}_API_KEY"] = cleaned_v
+                        if sec_key.lower() in ("gemini", "google") and sub_k.lower() in ("api_key", "key", "secret", "token"):
+                            os.environ["GEMINI_API_KEY"] = cleaned_v
+                        if sec_key.lower() == "openai" and sub_k.lower() in ("api_key", "key", "secret", "token"):
+                            os.environ["OPENAI_API_KEY"] = cleaned_v
 except Exception:
     pass
+
 
 from src.database import DatabaseManager
 from src.seeder import seed_sample_database
@@ -177,12 +197,27 @@ with st.sidebar:
         "openai": "OpenAI (Live Mode)"
     }
 
+    # Automatically promote to Gemini if key available, else OpenAI, else Demo
+    if "user_selected_provider" not in st.session_state:
+        if providers_info["gemini"]["available"]:
+            st.session_state.user_selected_provider = "gemini"
+        elif providers_info["openai"]["available"]:
+            st.session_state.user_selected_provider = "openai"
+        else:
+            st.session_state.user_selected_provider = "demo"
+    elif not providers_info[st.session_state.user_selected_provider]["available"] and st.session_state.user_selected_provider != "demo":
+        st.session_state.user_selected_provider = "gemini" if providers_info["gemini"]["available"] else "demo"
+
+    default_idx = provider_options.index(st.session_state.user_selected_provider) if st.session_state.user_selected_provider in provider_options else 0
+
     selected_provider_key = st.selectbox(
         "Select LLM Provider:",
         options=provider_options,
         format_func=lambda x: provider_labels[x],
-        index=0
+        index=default_idx,
+        key="llm_provider_selectbox"
     )
+    st.session_state.user_selected_provider = selected_provider_key
 
     info = providers_info[selected_provider_key]
 
@@ -192,9 +227,36 @@ with st.sidebar:
     else:
         env_var_name = info.get("env_var", "")
         if info["available"]:
-            st.success(f"✅ Environment secret `{env_var_name}` detected. Live mode ready.")
+            st.success(f"✅ Secret `{env_var_name}` detected. Live AI active.")
         else:
-            st.warning(f"⚠️ `{env_var_name}` is not set in environment or `.env`. Falling back to Demo Mode.")
+            st.warning(f"⚠️ `{env_var_name}` is not configured. Add it in Streamlit Cloud Settings &rarr; Secrets or connect below.")
+
+    # In-Session Quick Connect expander (keys remain securely in memory only, never written to disk or committed)
+    with st.expander("🔑 Quick Connect Gemini Key", expanded=(not providers_info["gemini"]["available"] and selected_provider_key == "gemini")):
+        st.caption("Connect a Google Gemini API key for this browser session without configuring Streamlit Secrets. Key is held securely in memory only.")
+        input_key = st.text_input(
+            "Gemini API Key:",
+            type="password",
+            placeholder="AIzaSy...",
+            key="gemini_session_key_input",
+            help="Free-tier API key from Google AI Studio (aistudio.google.com)"
+        )
+        col_c1, col_c2 = st.columns([1, 1])
+        with col_c1:
+            if st.button("Connect Key", key="btn_connect_gemini", use_container_width=True):
+                if input_key and input_key.strip():
+                    clean_k = input_key.strip().strip("'\"")
+                    os.environ["GEMINI_API_KEY"] = clean_k
+                    st.session_state.user_selected_provider = "gemini"
+                    st.rerun()
+                else:
+                    st.error("Please enter a valid key.")
+        with col_c2:
+            if os.environ.get("GEMINI_API_KEY") and st.button("Disconnect", key="btn_disconnect_gemini", use_container_width=True):
+                os.environ.pop("GEMINI_API_KEY", None)
+                os.environ.pop("GOOGLE_API_KEY", None)
+                st.session_state.user_selected_provider = "demo"
+                st.rerun()
 
     st.markdown("---")
     st.markdown("### 🛠️ Self-Healing Error Simulation")
