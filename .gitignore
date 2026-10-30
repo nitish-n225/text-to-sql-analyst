@@ -1,0 +1,34 @@
+# Environment & Secret Keys
+.env
+*.env
+!.env.example
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# SQLite Databases & testing scratch databases
+*.db-journal
+*.sqlite3-journal
+tests/test_business.db
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Streamlit session & cache
+.streamlit/secrets.toml
+
+# OS specific
+.DS_Store
+Thumbs.db

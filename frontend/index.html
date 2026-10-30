@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Text-to-SQL Analyst | Autonomous AI with Self-Healing Retry Loop</title>
+  <meta name="description" content="Autonomous Text-to-SQL Analyst. Ask in plain English, AI writes the query, errors automatically feed back for self-healing retries, and returns verified answer plus the SQL query used.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Chart.js for data visualization -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Prism.js for SQL syntax highlighting -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark-theme">
+  <!-- Top Navigation Bar -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand-logo">
+        <div class="logo-icon-wrapper">
+          <i data-lucide="database-zap" class="logo-icon"></i>
+        </div>
+        <div class="brand-text">
+          <div class="brand-title-row">
+            <span class="brand-num">4.</span>
+            <span class="brand-name">Text-to-SQL Analyst</span>
+            <span class="badge-pill pulse-badge">Self-Healing Loop</span>
+          </div>
+          <span class="brand-sub">Ask in plain English &bull; LLM writes query &bull; Errors retry &bull; Returns answer + SQL</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-center">
+      <div class="db-selector-card">
+        <label for="db-select" class="db-label">
+          <i data-lucide="database" class="icon-sm"></i>
+          <span>Active DB:</span>
+        </label>
+        <select id="db-select" class="custom-select">
+          <option value="ecommerce.db" selected>E-Commerce & Retail (ecommerce.db)</option>
+          <option value="company_hr.db">Company HR & Analytics (company_hr.db)</option>
+          <option value="healthcare.db">Hospital & Healthcare (healthcare.db)</option>
+        </select>
+        <button id="btn-inspect-schema" class="btn-subtle" title="Inspect Database Schema">
+          <i data-lucide="table-properties" class="icon-sm"></i>
+          <span>Schema</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div class="simulation-toggle-card" title="Toggle error injection to test and watch the self-correction retry loop">
+        <label class="toggle-switch">
+          <input type="checkbox" id="simulate-error-toggle">
+          <span class="slider"></span>
+        </label>
+        <span class="toggle-label">
+          <i data-lucide="bug-play" class="icon-xs"></i>
+          <span>Test Self-Correction</span>
+        </span>
+      </div>
+
+      <button id="btn-open-settings" class="btn-icon" title="AI Provider & Settings">
+        <i data-lucide="settings" class="icon-md"></i>
+      </button>
+
+      <button id="btn-open-upload" class="btn-icon" title="Upload Database or CSV">
+        <i data-lucide="upload-cloud" class="icon-md"></i>
+      </button>
+
+      <button id="btn-theme-toggle" class="btn-icon" title="Toggle Dark/Light Mode">
+        <i data-lucide="moon" class="icon-md" id="theme-icon"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-layout">
+    <!-- Hero / Query Input Section -->
+    <section class="prompt-hero-section">
+      <div class="prompt-card">
+        <div class="prompt-input-wrapper">
+          <div class="prompt-icon-col">
+            <i data-lucide="sparkles" class="sparkle-icon"></i>
+          </div>
+          <textarea 
+            id="natural-query-input" 
+            class="prompt-textarea" 
+            rows="2" 
+            placeholder="Ask anything in plain English... e.g., 'Show top 5 customers by total spending and order count' or 'Which department has the highest average salary?'"
+            spellcheck="false"
+          ></textarea>
+          <div class="prompt-actions-col">
+            <button id="btn-clear-query" class="btn-icon-subtle" title="Clear input">
+              <i data-lucide="x" class="icon-sm"></i>
+            </button>
+            <button id="btn-execute-query" class="btn-primary-glow">
+              <i data-lucide="play" class="icon-sm"></i>
+              <span>Analyze</span>
+              <kbd class="key-hint">Enter</kbd>
+            </button>
+          </div>
+        </div>
+
+        <!-- Sample Prompts Carousel / Chips -->
+        <div class="prompt-chips-row">
+          <span class="chips-label">
+            <i data-lucide="lightbulb" class="icon-xs"></i>
+            <span>Try asking:</span>
+          </span>
+          <div id="prompt-chips-container" class="chips-container">
+            <!-- Dynamically populated chips -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Execution Status & Retry Loop Live Stream (Shown during & after analysis) -->
+    <section id="retry-loop-section" class="retry-loop-section hidden">
+      <div class="section-card loop-card">
+        <div class="loop-header" id="loop-header">
+          <div class="loop-status-title">
+            <div class="status-indicator-dot" id="loop-dot"></div>
+            <span class="loop-title" id="loop-title">Self-Healing Execution Pipeline</span>
+            <span class="attempt-badge" id="attempt-badge">1 Attempt</span>
+          </div>
+          <div class="loop-meta" id="loop-meta">
+            <span id="loop-duration"><i data-lucide="timer" class="icon-xs"></i> 0ms</span>
+            <button id="btn-toggle-trace" class="btn-link">View Trace Details</button>
+          </div>
+        </div>
+        <div class="loop-body" id="loop-body">
+          <!-- Live timeline cards for each attempt -->
+          <div id="retry-timeline" class="retry-timeline"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Results Display Section -->
+    <section id="results-section" class="results-section hidden">
+      <!-- Tabs for Answer, Visualization, SQL Inspection, and Direct Editor -->
+      <div class="results-tabs-bar">
+        <div class="tabs-group">
+          <button class="tab-btn active" data-tab="tab-overview">
+            <i data-lucide="file-text" class="icon-xs"></i>
+            <span>Analyst Answer</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-chart" id="tab-btn-chart">
+            <i data-lucide="bar-chart-3" class="icon-xs"></i>
+            <span>Visual Chart</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-data">
+            <i data-lucide="table" class="icon-xs"></i>
+            <span>Data Grid (<span id="result-row-count">0</span>)</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-sql">
+            <i data-lucide="code-2" class="icon-xs"></i>
+            <span>SQL Query Used</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-playground">
+            <i data-lucide="terminal" class="icon-xs"></i>
+            <span>SQL Sandbox</span>
+          </button>
+        </div>
+
+        <div class="tab-actions">
+          <button id="btn-copy-sql" class="btn-subtle" title="Copy SQL statement">
+            <i data-lucide="copy" class="icon-xs"></i>
+            <span>Copy SQL</span>
+          </button>
+          <button id="btn-export-csv" class="btn-subtle" title="Export results to CSV">
+            <i data-lucide="download" class="icon-xs"></i>
+            <span>Export CSV</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab 1: Overview & Executive Answer -->
+      <div class="tab-pane active" id="tab-overview">
+        <div class="answer-card">
+          <div class="answer-header">
+            <div class="answer-title-col">
+              <span class="answer-badge">Executive Summary</span>
+              <h2 class="question-echo" id="question-echo"></h2>
+            </div>
+            <div class="meta-pills" id="answer-pills">
+              <!-- Dynamically populated pills -->
+            </div>
+          </div>
+          <div class="answer-content-box" id="answer-text"></div>
+
+          <!-- Highlighted SQL snippet inside Overview for instant review -->
+          <div class="overview-sql-preview">
+            <div class="sql-preview-header">
+              <span class="sql-tag"><i data-lucide="code" class="icon-xs"></i> Generated SQL Query</span>
+              <button class="btn-link" id="btn-jump-sql">Open in Sandbox &rarr;</button>
+            </div>
+            <pre class="sql-code-block"><code class="language-sql" id="overview-sql-code"></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Visual Chart -->
+      <div class="tab-pane" id="tab-chart">
+        <div class="chart-card">
+          <div class="chart-header">
+            <div class="chart-title-group">
+              <h3 class="chart-title">Data Insights Visualization</h3>
+              <p class="chart-subtitle">Auto-generated from SQL result dimensions</p>
+            </div>
+            <div class="chart-type-selector">
+              <button class="chart-type-btn active" data-chart="bar" title="Bar Chart"><i data-lucide="bar-chart-2" class="icon-xs"></i></button>
+              <button class="chart-type-btn" data-chart="line" title="Line Chart"><i data-lucide="line-chart" class="icon-xs"></i></button>
+              <button class="chart-type-btn" data-chart="doughnut" title="Doughnut Chart"><i data-lucide="pie-chart" class="icon-xs"></i></button>
+            </div>
+          </div>
+          <div class="chart-canvas-container">
+            <canvas id="analytics-chart"></canvas>
+            <div id="no-chart-msg" class="no-chart-notice hidden">
+              <i data-lucide="info" class="icon-md"></i>
+              <span>This query's data shape is best viewed in the Data Grid.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3: Interactive Data Grid -->
+      <div class="tab-pane" id="tab-data">
+        <div class="table-card">
+          <div class="table-toolbar">
+            <div class="search-table-input">
+              <i data-lucide="search" class="icon-xs"></i>
+              <input type="text" id="table-search" placeholder="Filter rows in results...">
+            </div>
+            <span class="table-stats" id="table-stats">Displaying rows</span>
+          </div>
+          <div class="table-scroll-container">
+            <table class="data-table" id="results-table">
+              <thead id="table-head"></thead>
+              <tbody id="table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 4: SQL Query Used & Explain Plan -->
+      <div class="tab-pane" id="tab-sql">
+        <div class="sql-detail-card">
+          <div class="sql-card-header">
+            <div class="sql-meta-tags">
+              <span class="tag-badge"><i data-lucide="database" class="icon-xs"></i> Dialect: SQLite 3</span>
+              <span class="tag-badge" id="sql-time-tag"><i data-lucide="zap" class="icon-xs"></i> 2.1 ms</span>
+            </div>
+            <div class="sql-card-actions">
+              <button id="btn-explain-plan" class="btn-subtle">
+                <i data-lucide="git-branch" class="icon-xs"></i>
+                <span>Explain Query Plan</span>
+              </button>
+            </div>
+          </div>
+          <pre class="sql-code-block full-sql"><code class="language-sql" id="full-sql-code"></code></pre>
+          
+          <div id="explain-plan-container" class="explain-plan-container hidden">
+            <h4><i data-lucide="cpu" class="icon-xs"></i> Execution Plan (EXPLAIN QUERY PLAN)</h4>
+            <div id="explain-plan-output" class="explain-output"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 5: SQL Sandbox / Playground -->
+      <div class="tab-pane" id="tab-playground">
+        <div class="sandbox-card">
+          <div class="sandbox-header">
+            <div>
+              <h3>Interactive SQL Playground</h3>
+              <p>Directly test, tweak, or execute custom SQL queries against the active database.</p>
+            </div>
+            <button id="btn-run-sandbox" class="btn-primary-glow">
+              <i data-lucide="play" class="icon-sm"></i>
+              <span>Execute Sandbox SQL</span>
+            </button>
+          </div>
+          <textarea id="sandbox-textarea" class="sandbox-editor" rows="6" spellcheck="false"></textarea>
+          <div id="sandbox-result-area" class="sandbox-result-area hidden">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Empty State / Welcome Guide (Visible before first query) -->
+    <section id="welcome-section" class="welcome-section">
+      <div class="welcome-card">
+        <div class="welcome-badge">
+          <i data-lucide="bot" class="icon-sm"></i>
+          <span>Next-Generation Autonomous Text-to-SQL</span>
+        </div>
+        <h1>Natural Language Database Intelligence</h1>
+        <p class="welcome-desc">
+          Ask questions in plain conversational English. The AI examines your database schema, writes valid SQL, executes it, and if any database error occurs, <strong>automatically analyzes the traceback and retries until the query succeeds</strong>.
+        </p>
+
+        <div class="features-grid">
+          <div class="feature-item">
+            <div class="feature-icon indigo"><i data-lucide="message-square"></i></div>
+            <div class="feature-text">
+              <h3>Ask in Plain English</h3>
+              <p>Zero SQL knowledge required. Ask complex aggregations, joins, date filters, and ranking questions naturally.</p>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <div class="feature-icon cyan"><i data-lucide="code-2"></i></div>
+            <div class="feature-text">
+              <h3>LLM Writes the Query</h3>
+              <p>Schema-aware dialect generation with primary/foreign keys and relationship understanding.</p>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <div class="feature-icon amber"><i data-lucide="refresh-cw"></i></div>
+            <div class="feature-text">
+              <h3>Self-Healing Error Retry</h3>
+              <p>Runtime syntax errors, unknown columns, or grouping issues feed back into the AI to self-correct automatically.</p>
+            </div>
+          </div>
+
+          <div class="feature-item">
+            <div class="feature-icon emerald"><i data-lucide="pie-chart"></i></div>
+            <div class="feature-text">
+              <h3>Answer + Query + Charts</h3>
+              <p>Get instant executive summaries, highlighted SQL queries, data tables, and interactive auto-visualizations.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="test-callout">
+          <div class="test-callout-icon">💡</div>
+          <div class="test-callout-content">
+            <strong>Want to see the Self-Healing Retry Loop in action?</strong>
+            <span>Turn on the <em>"Test Self-Correction"</em> toggle at the top right, then ask any question. Watch the agent detect the simulated column error, inspect the schema, formulate a fix, and succeed!</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Schema Inspector Modal -->
+  <div id="modal-schema" class="modal-overlay hidden">
+    <div class="modal-container modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="table-properties" class="icon-md"></i>
+          <div>
+            <h3 id="schema-modal-title">Database Schema Inspector</h3>
+            <p id="schema-modal-subtitle">Tables, Columns, Relationships, and Sample Records</p>
+          </div>
+        </div>
+        <button class="modal-close" id="btn-close-schema">&times;</button>
+      </div>
+      <div class="modal-body" id="schema-modal-body">
+        <div class="loading-spinner-wrapper"><div class="spinner"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings / AI Provider Modal -->
+  <div id="modal-settings" class="modal-overlay hidden">
+    <div class="modal-container modal-md">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="sliders" class="icon-md"></i>
+          <div>
+            <h3>AI Provider & Engine Settings</h3>
+            <p>Configure LLM endpoints, API keys, or use built-in offline engine</p>
+          </div>
+        </div>
+        <button class="modal-close" id="btn-close-settings">&times;</button>
+      </div>
+      <div class="modal-body settings-body">
+        <div class="setting-group">
+          <label class="setting-label">AI Provider:</label>
+          <select id="setting-provider" class="custom-select">
+            <option value="offline" selected>⚡ Smart Offline Heuristic Engine (No API Key Required)</option>
+            <option value="gemini">Google Gemini (Gemini 2.0 Flash / 1.5 Pro)</option>
+            <option value="openai">OpenAI (GPT-4o / GPT-4o-mini)</option>
+            <option value="groq">Groq Cloud (Llama 3.3 70B - Lightning Fast)</option>
+            <option value="ollama">Ollama (Local LLM)</option>
+            <option value="custom">Custom OpenAI-Compatible API</option>
+          </select>
+        </div>
+
+        <div class="setting-group" id="group-api-key">
+          <label class="setting-label" id="label-api-key">API Key:</label>
+          <div class="input-with-icon">
+            <input type="password" id="setting-api-key" placeholder="Enter API Key (saved securely in browser session)...">
+            <button type="button" class="btn-subtle btn-xs" id="btn-toggle-key-vis">Show</button>
+          </div>
+          <span class="setting-help" id="help-api-key">Leave empty to use built-in offline engine.</span>
+        </div>
+
+        <div class="setting-group" id="group-model">
+          <label class="setting-label">Model Name:</label>
+          <input type="text" id="setting-model" placeholder="e.g. gemini-1.5-flash or gpt-4o-mini">
+        </div>
+
+        <div class="setting-group hidden" id="group-base-url">
+          <label class="setting-label">Base URL:</label>
+          <input type="text" id="setting-base-url" placeholder="http://localhost:11434 or custom endpoint">
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">Max Retries on Error:</label>
+          <div class="range-row">
+            <input type="range" id="setting-max-retries" min="1" max="5" value="3" step="1">
+            <span id="max-retries-val" class="range-val-badge">3</span>
+          </div>
+          <span class="setting-help">Number of times the LLM attempts self-healing error correction.</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-settings" class="btn-primary-glow">Save Preferences</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload DB / CSV Modal -->
+  <div id="modal-upload" class="modal-overlay hidden">
+    <div class="modal-container modal-md">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="upload-cloud" class="icon-md"></i>
+          <div>
+            <h3>Upload Database or CSV</h3>
+            <p>Load your custom SQLite database or convert a CSV into tables</p>
+          </div>
+        </div>
+        <button class="modal-close" id="btn-close-upload">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="upload-tabs">
+          <button class="upload-tab active" data-utab="utab-db">SQLite Database (.db)</button>
+          <button class="upload-tab" data-utab="utab-csv">CSV File (.csv)</button>
+          <button class="upload-tab" data-utab="utab-reset">Reset Samples</button>
+        </div>
+
+        <!-- Tab SQLite -->
+        <div class="upload-pane active" id="utab-db">
+          <div class="drop-zone" id="db-drop-zone">
+            <i data-lucide="file-up" class="drop-icon"></i>
+            <h4>Choose a SQLite file (.db, .sqlite, .sqlite3)</h4>
+            <p>Drag and drop here, or click to browse</p>
+            <input type="file" id="db-file-input" accept=".db,.sqlite,.sqlite3" class="file-hidden">
+          </div>
+          <div id="db-upload-status" class="upload-status"></div>
+        </div>
+
+        <!-- Tab CSV -->
+        <div class="upload-pane" id="utab-csv">
+          <div class="setting-group">
+            <label class="setting-label">Target Table Name:</label>
+            <input type="text" id="csv-table-name" placeholder="e.g. sales_data">
+          </div>
+          <div class="drop-zone" id="csv-drop-zone">
+            <i data-lucide="file-spreadsheet" class="drop-icon"></i>
+            <h4>Choose a CSV File</h4>
+            <p>Will be imported as a table in the active database</p>
+            <input type="file" id="csv-file-input" accept=".csv" class="file-hidden">
+          </div>
+          <div id="csv-upload-status" class="upload-status"></div>
+        </div>
+
+        <!-- Tab Reset -->
+        <div class="upload-pane" id="utab-reset">
+          <div class="reset-prompt-box">
+            <i data-lucide="alert-triangle" class="icon-lg warning-icon"></i>
+            <h4>Reset Sample Databases</h4>
+            <p>This will recreate the default E-Commerce, HR & Talent, and Healthcare databases with original sample records.</p>
+            <button id="btn-confirm-reset" class="btn-danger">
+              <i data-lucide="refresh-cw" class="icon-sm"></i>
+              <span>Re-seed Sample Databases</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

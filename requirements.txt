@@ -1,0 +1,17 @@
+# Core Streamlit & Web Framework
+streamlit>=1.30.0
+
+# Database & ORM
+sqlalchemy>=2.0.0
+
+# Data Processing & Visualization
+pandas>=2.0.0
+plotly>=5.18.0
+
+# SQL Parsing & Safety Validation
+sqlglot>=20.0.0
+
+# LLM Providers & Environment Management
+python-dotenv>=1.0.0
+requests>=2.31.0
+openai>=1.10.0
