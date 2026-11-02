@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Text-to-SQL Analyst | Autonomous AI with Self-Healing Retry Loop</title>
+  <title>Text-to-SQL Analyst | Autonomous Enterprise AI with Self-Healing Loop</title>
   <meta name="description" content="Autonomous Text-to-SQL Analyst. Ask in plain English, AI writes the query, errors automatically feed back for self-healing retries, and returns verified answer plus the SQL query used.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <!-- Chart.js for data visualization -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <!-- Prism.js for SQL syntax highlighting -->
@@ -22,17 +22,21 @@
   <!-- Top Navigation Bar -->
   <header class="app-header">
     <div class="header-left">
+      <button id="btn-toggle-sidebar" class="btn-icon" title="Toggle Schema Explorer Sidebar (Ctrl+B)">
+        <i data-lucide="panel-left-open" class="icon-md"></i>
+      </button>
+
       <div class="brand-logo">
         <div class="logo-icon-wrapper">
           <i data-lucide="database-zap" class="logo-icon"></i>
         </div>
         <div class="brand-text">
           <div class="brand-title-row">
-            <span class="brand-num">4.</span>
+            <span class="brand-num">4.2</span>
             <span class="brand-name">Text-to-SQL Analyst</span>
             <span class="badge-pill pulse-badge">Self-Healing Loop</span>
           </div>
-          <span class="brand-sub">Ask in plain English &bull; LLM writes query &bull; Errors retry &bull; Returns answer + SQL</span>
+          <span class="brand-sub">Autonomous Schema-Aware Querying &bull; AST Sandboxed &bull; Bounded Retries</span>
         </div>
       </div>
     </div>
@@ -68,7 +72,7 @@
       </div>
 
       <button id="btn-open-settings" class="btn-icon" title="AI Provider & Settings">
-        <i data-lucide="settings" class="icon-md"></i>
+        <i data-lucide="sliders" class="icon-md"></i>
       </button>
 
       <button id="btn-open-upload" class="btn-icon" title="Upload Database or CSV">
@@ -81,276 +85,363 @@
     </div>
   </header>
 
-  <!-- Main Container -->
-  <main class="main-layout">
-    <!-- Hero / Query Input Section -->
-    <section class="prompt-hero-section">
-      <div class="prompt-card">
-        <div class="prompt-input-wrapper">
-          <div class="prompt-icon-col">
-            <i data-lucide="sparkles" class="sparkle-icon"></i>
-          </div>
-          <textarea 
-            id="natural-query-input" 
-            class="prompt-textarea" 
-            rows="2" 
-            placeholder="Ask anything in plain English... e.g., 'Show top 5 customers by total spending and order count' or 'Which department has the highest average salary?'"
-            spellcheck="false"
-          ></textarea>
-          <div class="prompt-actions-col">
-            <button id="btn-clear-query" class="btn-icon-subtle" title="Clear input">
-              <i data-lucide="x" class="icon-sm"></i>
-            </button>
-            <button id="btn-execute-query" class="btn-primary-glow">
-              <i data-lucide="play" class="icon-sm"></i>
-              <span>Analyze</span>
-              <kbd class="key-hint">Enter</kbd>
-            </button>
-          </div>
+  <!-- Workspace Shell with Sidebar + Main Content -->
+  <div class="app-shell">
+    <!-- Collapsible Schema Explorer & History Sidebar -->
+    <aside class="app-sidebar" id="app-sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title-group">
+          <i data-lucide="layers" class="icon-sm"></i>
+          <span>Schema Explorer</span>
         </div>
-
-        <!-- Sample Prompts Carousel / Chips -->
-        <div class="prompt-chips-row">
-          <span class="chips-label">
-            <i data-lucide="lightbulb" class="icon-xs"></i>
-            <span>Try asking:</span>
-          </span>
-          <div id="prompt-chips-container" class="chips-container">
-            <!-- Dynamically populated chips -->
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Execution Status & Retry Loop Live Stream (Shown during & after analysis) -->
-    <section id="retry-loop-section" class="retry-loop-section hidden">
-      <div class="section-card loop-card">
-        <div class="loop-header" id="loop-header">
-          <div class="loop-status-title">
-            <div class="status-indicator-dot" id="loop-dot"></div>
-            <span class="loop-title" id="loop-title">Self-Healing Execution Pipeline</span>
-            <span class="attempt-badge" id="attempt-badge">1 Attempt</span>
-          </div>
-          <div class="loop-meta" id="loop-meta">
-            <span id="loop-duration"><i data-lucide="timer" class="icon-xs"></i> 0ms</span>
-            <button id="btn-toggle-trace" class="btn-link">View Trace Details</button>
-          </div>
-        </div>
-        <div class="loop-body" id="loop-body">
-          <!-- Live timeline cards for each attempt -->
-          <div id="retry-timeline" class="retry-timeline"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Results Display Section -->
-    <section id="results-section" class="results-section hidden">
-      <!-- Tabs for Answer, Visualization, SQL Inspection, and Direct Editor -->
-      <div class="results-tabs-bar">
-        <div class="tabs-group">
-          <button class="tab-btn active" data-tab="tab-overview">
-            <i data-lucide="file-text" class="icon-xs"></i>
-            <span>Analyst Answer</span>
-          </button>
-          <button class="tab-btn" data-tab="tab-chart" id="tab-btn-chart">
-            <i data-lucide="bar-chart-3" class="icon-xs"></i>
-            <span>Visual Chart</span>
-          </button>
-          <button class="tab-btn" data-tab="tab-data">
-            <i data-lucide="table" class="icon-xs"></i>
-            <span>Data Grid (<span id="result-row-count">0</span>)</span>
-          </button>
-          <button class="tab-btn" data-tab="tab-sql">
-            <i data-lucide="code-2" class="icon-xs"></i>
-            <span>SQL Query Used</span>
-          </button>
-          <button class="tab-btn" data-tab="tab-playground">
-            <i data-lucide="terminal" class="icon-xs"></i>
-            <span>SQL Sandbox</span>
-          </button>
-        </div>
-
-        <div class="tab-actions">
-          <button id="btn-copy-sql" class="btn-subtle" title="Copy SQL statement">
-            <i data-lucide="copy" class="icon-xs"></i>
-            <span>Copy SQL</span>
-          </button>
-          <button id="btn-export-csv" class="btn-subtle" title="Export results to CSV">
-            <i data-lucide="download" class="icon-xs"></i>
-            <span>Export CSV</span>
-          </button>
-        </div>
+        <button id="btn-refresh-sidebar-schema" class="btn-icon-subtle" title="Refresh Table Schema">
+          <i data-lucide="refresh-cw" class="icon-xs"></i>
+        </button>
       </div>
 
-      <!-- Tab 1: Overview & Executive Answer -->
-      <div class="tab-pane active" id="tab-overview">
-        <div class="answer-card">
-          <div class="answer-header">
-            <div class="answer-title-col">
-              <span class="answer-badge">Executive Summary</span>
-              <h2 class="question-echo" id="question-echo"></h2>
-            </div>
-            <div class="meta-pills" id="answer-pills">
-              <!-- Dynamically populated pills -->
-            </div>
+      <div class="sidebar-content">
+        <!-- Tables List Accordion -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">
+            <span>Tables & Schema</span>
+            <span id="sidebar-table-count" class="badge-outline">0 tables</span>
           </div>
-          <div class="answer-content-box" id="answer-text"></div>
-
-          <!-- Highlighted SQL snippet inside Overview for instant review -->
-          <div class="overview-sql-preview">
-            <div class="sql-preview-header">
-              <span class="sql-tag"><i data-lucide="code" class="icon-xs"></i> Generated SQL Query</span>
-              <button class="btn-link" id="btn-jump-sql">Open in Sandbox &rarr;</button>
-            </div>
-            <pre class="sql-code-block"><code class="language-sql" id="overview-sql-code"></code></pre>
+          <div id="sidebar-tables-container">
+            <div class="loading-spinner-wrapper"><div class="spinner"></div></div>
           </div>
         </div>
-      </div>
 
-      <!-- Tab 2: Visual Chart -->
-      <div class="tab-pane" id="tab-chart">
-        <div class="chart-card">
-          <div class="chart-header">
-            <div class="chart-title-group">
-              <h3 class="chart-title">Data Insights Visualization</h3>
-              <p class="chart-subtitle">Auto-generated from SQL result dimensions</p>
-            </div>
-            <div class="chart-type-selector">
-              <button class="chart-type-btn active" data-chart="bar" title="Bar Chart"><i data-lucide="bar-chart-2" class="icon-xs"></i></button>
-              <button class="chart-type-btn" data-chart="line" title="Line Chart"><i data-lucide="line-chart" class="icon-xs"></i></button>
-              <button class="chart-type-btn" data-chart="doughnut" title="Doughnut Chart"><i data-lucide="pie-chart" class="icon-xs"></i></button>
-            </div>
+        <!-- Quick Business Prompts -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">
+            <span>Prompt Templates</span>
           </div>
-          <div class="chart-canvas-container">
-            <canvas id="analytics-chart"></canvas>
-            <div id="no-chart-msg" class="no-chart-notice hidden">
-              <i data-lucide="info" class="icon-md"></i>
-              <span>This query's data shape is best viewed in the Data Grid.</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab 3: Interactive Data Grid -->
-      <div class="tab-pane" id="tab-data">
-        <div class="table-card">
-          <div class="table-toolbar">
-            <div class="search-table-input">
-              <i data-lucide="search" class="icon-xs"></i>
-              <input type="text" id="table-search" placeholder="Filter rows in results...">
-            </div>
-            <span class="table-stats" id="table-stats">Displaying rows</span>
-          </div>
-          <div class="table-scroll-container">
-            <table class="data-table" id="results-table">
-              <thead id="table-head"></thead>
-              <tbody id="table-body"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab 4: SQL Query Used & Explain Plan -->
-      <div class="tab-pane" id="tab-sql">
-        <div class="sql-detail-card">
-          <div class="sql-card-header">
-            <div class="sql-meta-tags">
-              <span class="tag-badge"><i data-lucide="database" class="icon-xs"></i> Dialect: SQLite 3</span>
-              <span class="tag-badge" id="sql-time-tag"><i data-lucide="zap" class="icon-xs"></i> 2.1 ms</span>
-            </div>
-            <div class="sql-card-actions">
-              <button id="btn-explain-plan" class="btn-subtle">
-                <i data-lucide="git-branch" class="icon-xs"></i>
-                <span>Explain Query Plan</span>
-              </button>
-            </div>
-          </div>
-          <pre class="sql-code-block full-sql"><code class="language-sql" id="full-sql-code"></code></pre>
-          
-          <div id="explain-plan-container" class="explain-plan-container hidden">
-            <h4><i data-lucide="cpu" class="icon-xs"></i> Execution Plan (EXPLAIN QUERY PLAN)</h4>
-            <div id="explain-plan-output" class="explain-output"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Tab 5: SQL Sandbox / Playground -->
-      <div class="tab-pane" id="tab-playground">
-        <div class="sandbox-card">
-          <div class="sandbox-header">
-            <div>
-              <h3>Interactive SQL Playground</h3>
-              <p>Directly test, tweak, or execute custom SQL queries against the active database.</p>
-            </div>
-            <button id="btn-run-sandbox" class="btn-primary-glow">
-              <i data-lucide="play" class="icon-sm"></i>
-              <span>Execute Sandbox SQL</span>
-            </button>
-          </div>
-          <textarea id="sandbox-textarea" class="sandbox-editor" rows="6" spellcheck="false"></textarea>
-          <div id="sandbox-result-area" class="sandbox-result-area hidden">
+          <div id="sidebar-templates-container">
             <!-- Dynamically populated -->
           </div>
         </div>
       </div>
-    </section>
+    </aside>
 
-    <!-- Empty State / Welcome Guide (Visible before first query) -->
-    <section id="welcome-section" class="welcome-section">
-      <div class="welcome-card">
-        <div class="welcome-badge">
-          <i data-lucide="bot" class="icon-sm"></i>
-          <span>Next-Generation Autonomous Text-to-SQL</span>
+    <!-- Main Workspace Layout -->
+    <main class="main-layout">
+      <!-- Prompt Hero Section -->
+      <section class="prompt-hero-section">
+        <div class="prompt-card">
+          <!-- Status pill indicators -->
+          <div class="prompt-status-bar">
+            <div class="prompt-status-tags">
+              <span class="status-tag db" id="status-active-db">
+                <i data-lucide="database" class="icon-xs"></i> ecommerce.db
+              </span>
+              <span class="status-tag ast">
+                <i data-lucide="shield-check" class="icon-xs"></i> AST Read-Only Sandbox
+              </span>
+              <span class="status-tag ai" id="status-active-ai">
+                <i data-lucide="cpu" class="icon-xs"></i> Offline Engine
+              </span>
+            </div>
+            <span class="key-hint" style="font-size:0.75rem;color:var(--text-muted)">Press Enter to Analyze</span>
+          </div>
+
+          <div class="prompt-input-wrapper">
+            <div class="prompt-icon-col">
+              <i data-lucide="sparkles" class="sparkle-icon"></i>
+            </div>
+            <textarea 
+              id="natural-query-input" 
+              class="prompt-textarea" 
+              rows="2" 
+              placeholder="Ask anything in plain English... e.g. 'Show top 5 customers by total spending and order count' or 'Which department has the highest average salary?'"
+              spellcheck="false"
+            ></textarea>
+            <div class="prompt-actions-col">
+              <button id="btn-clear-query" class="btn-icon-subtle" title="Clear input">
+                <i data-lucide="x" class="icon-sm"></i>
+              </button>
+              <button id="btn-execute-query" class="btn-primary-glow">
+                <i data-lucide="play" class="icon-sm"></i>
+                <span>Analyze</span>
+                <kbd class="key-hint">Enter</kbd>
+              </button>
+            </div>
+          </div>
+
+          <!-- Sample Prompts Carousel / Chips -->
+          <div class="prompt-chips-row">
+            <span class="chips-label">
+              <i data-lucide="lightbulb" class="icon-xs"></i>
+              <span>Try asking:</span>
+            </span>
+            <div id="prompt-chips-container" class="chips-container">
+              <!-- Dynamically populated chips -->
+            </div>
+          </div>
         </div>
-        <h1>Natural Language Database Intelligence</h1>
-        <p class="welcome-desc">
-          Ask questions in plain conversational English. The AI examines your database schema, writes valid SQL, executes it, and if any database error occurs, <strong>automatically analyzes the traceback and retries until the query succeeds</strong>.
-        </p>
+      </section>
 
-        <div class="features-grid">
-          <div class="feature-item">
-            <div class="feature-icon indigo"><i data-lucide="message-square"></i></div>
-            <div class="feature-text">
-              <h3>Ask in Plain English</h3>
-              <p>Zero SQL knowledge required. Ask complex aggregations, joins, date filters, and ranking questions naturally.</p>
+      <!-- Execution Status & Retry Loop Live Stream (Shown during & after analysis) -->
+      <section id="retry-loop-section" class="retry-loop-section hidden">
+        <div class="loop-card">
+          <div class="loop-header" id="loop-header">
+            <div class="loop-status-title">
+              <div class="status-indicator-dot" id="loop-dot"></div>
+              <span class="loop-title" id="loop-title">Self-Healing Execution Pipeline</span>
+              <span class="attempt-badge" id="attempt-badge">1 Attempt</span>
+            </div>
+            <div class="loop-meta" id="loop-meta">
+              <span id="loop-duration"><i data-lucide="timer" class="icon-xs"></i> 0ms</span>
+              <button id="btn-toggle-trace" class="btn-link">View Trace Details</button>
             </div>
           </div>
+          <div class="loop-body" id="loop-body">
+            <!-- Live timeline cards for each attempt -->
+            <div id="retry-timeline" class="retry-timeline"></div>
+          </div>
+        </div>
+      </section>
 
-          <div class="feature-item">
-            <div class="feature-icon cyan"><i data-lucide="code-2"></i></div>
-            <div class="feature-text">
-              <h3>LLM Writes the Query</h3>
-              <p>Schema-aware dialect generation with primary/foreign keys and relationship understanding.</p>
+      <!-- Results Display Section -->
+      <section id="results-section" class="results-section hidden">
+        <!-- Executive KPI Metrics Row -->
+        <div class="kpi-row" id="kpi-summary-row">
+          <div class="kpi-card">
+            <div class="kpi-icon-box indigo"><i data-lucide="zap"></i></div>
+            <div class="kpi-meta">
+              <span class="kpi-label">Query Latency</span>
+              <span class="kpi-value" id="kpi-latency">0 ms</span>
             </div>
           </div>
-
-          <div class="feature-item">
-            <div class="feature-icon amber"><i data-lucide="refresh-cw"></i></div>
-            <div class="feature-text">
-              <h3>Self-Healing Error Retry</h3>
-              <p>Runtime syntax errors, unknown columns, or grouping issues feed back into the AI to self-correct automatically.</p>
+          <div class="kpi-card">
+            <div class="kpi-icon-box emerald"><i data-lucide="shield-check"></i></div>
+            <div class="kpi-meta">
+              <span class="kpi-label">Safety Status</span>
+              <span class="kpi-value" id="kpi-safety">AST Verified</span>
             </div>
           </div>
-
-          <div class="feature-item">
-            <div class="feature-icon emerald"><i data-lucide="pie-chart"></i></div>
-            <div class="feature-text">
-              <h3>Answer + Query + Charts</h3>
-              <p>Get instant executive summaries, highlighted SQL queries, data tables, and interactive auto-visualizations.</p>
+          <div class="kpi-card">
+            <div class="kpi-icon-box cyan"><i data-lucide="table"></i></div>
+            <div class="kpi-meta">
+              <span class="kpi-label">Dataset Rows</span>
+              <span class="kpi-value" id="kpi-rows">0 rows</span>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon-box amber"><i data-lucide="refresh-cw"></i></div>
+            <div class="kpi-meta">
+              <span class="kpi-label">Self-Healing Attempts</span>
+              <span class="kpi-value" id="kpi-attempts">1 Attempt</span>
             </div>
           </div>
         </div>
 
-        <div class="test-callout">
-          <div class="test-callout-icon">💡</div>
-          <div class="test-callout-content">
-            <strong>Want to see the Self-Healing Retry Loop in action?</strong>
-            <span>Turn on the <em>"Test Self-Correction"</em> toggle at the top right, then ask any question. Watch the agent detect the simulated column error, inspect the schema, formulate a fix, and succeed!</span>
+        <!-- Tabs for Answer, Visualization, SQL Inspection, and Direct Editor -->
+        <div class="results-tabs-bar">
+          <div class="tabs-group">
+            <button class="tab-btn active" data-tab="tab-overview">
+              <i data-lucide="file-text" class="icon-xs"></i>
+              <span>Analyst Answer</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-chart" id="tab-btn-chart">
+              <i data-lucide="bar-chart-3" class="icon-xs"></i>
+              <span>Visual Chart</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-data">
+              <i data-lucide="table" class="icon-xs"></i>
+              <span>Data Grid (<span id="result-row-count">0</span>)</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-sql">
+              <i data-lucide="code-2" class="icon-xs"></i>
+              <span>SQL Query Used</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-playground">
+              <i data-lucide="terminal" class="icon-xs"></i>
+              <span>SQL Sandbox</span>
+            </button>
+          </div>
+
+          <div class="tab-actions">
+            <button id="btn-copy-sql" class="btn-subtle" title="Copy SQL statement">
+              <i data-lucide="copy" class="icon-xs"></i>
+              <span>Copy SQL</span>
+            </button>
+            <button id="btn-export-csv" class="btn-subtle" title="Export results to CSV">
+              <i data-lucide="download" class="icon-xs"></i>
+              <span>Export CSV</span>
+            </button>
           </div>
         </div>
-      </div>
-    </section>
-  </main>
+
+        <!-- Tab 1: Overview & Executive Answer -->
+        <div class="tab-pane active" id="tab-overview">
+          <div class="answer-card">
+            <div class="answer-header">
+              <div class="answer-title-col">
+                <span class="answer-badge">Executive Summary</span>
+                <h2 class="question-echo" id="question-echo"></h2>
+              </div>
+              <div class="meta-pills" id="answer-pills">
+                <!-- Dynamically populated pills -->
+              </div>
+            </div>
+            <div class="answer-content-box" id="answer-text"></div>
+
+            <!-- Highlighted SQL snippet inside Overview for instant review -->
+            <div class="overview-sql-preview">
+              <div class="sql-preview-header">
+                <span class="sql-tag"><i data-lucide="code" class="icon-xs"></i> Generated SQL Query</span>
+                <button class="btn-link" id="btn-jump-sql">Open in Sandbox &rarr;</button>
+              </div>
+              <pre class="sql-code-block"><code class="language-sql" id="overview-sql-code"></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Visual Chart -->
+        <div class="tab-pane" id="tab-chart">
+          <div class="chart-card">
+            <div class="chart-header">
+              <div class="chart-title-group">
+                <h3 class="chart-title">Data Insights Visualization</h3>
+                <p class="chart-subtitle">Auto-generated from SQL result dimensions</p>
+              </div>
+              <div class="chart-type-selector">
+                <button class="chart-type-btn active" data-chart="bar" title="Bar Chart"><i data-lucide="bar-chart-2" class="icon-xs"></i></button>
+                <button class="chart-type-btn" data-chart="line" title="Line Chart"><i data-lucide="line-chart" class="icon-xs"></i></button>
+                <button class="chart-type-btn" data-chart="doughnut" title="Doughnut Chart"><i data-lucide="pie-chart" class="icon-xs"></i></button>
+              </div>
+            </div>
+            <div class="chart-canvas-container">
+              <canvas id="analytics-chart"></canvas>
+              <div id="no-chart-msg" class="no-chart-notice hidden">
+                <i data-lucide="info" class="icon-md"></i>
+                <span>This query's data shape is best viewed in the Data Grid.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Interactive Data Grid -->
+        <div class="tab-pane" id="tab-data">
+          <div class="table-card">
+            <div class="table-toolbar">
+              <div class="search-table-input">
+                <i data-lucide="search" class="icon-xs"></i>
+                <input type="text" id="table-search" placeholder="Filter rows in results...">
+              </div>
+              <span class="table-stats" id="table-stats">Displaying rows</span>
+            </div>
+            <div class="table-scroll-container">
+              <table class="data-table" id="results-table">
+                <thead id="table-head"></thead>
+                <tbody id="table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: SQL Query Used & Explain Plan -->
+        <div class="tab-pane" id="tab-sql">
+          <div class="sql-detail-card">
+            <div class="sql-card-header">
+              <div class="sql-meta-tags">
+                <span class="tag-badge"><i data-lucide="database" class="icon-xs"></i> Dialect: SQLite 3</span>
+                <span class="tag-badge" id="sql-time-tag"><i data-lucide="zap" class="icon-xs"></i> 2.1 ms</span>
+              </div>
+              <div class="sql-card-actions">
+                <button id="btn-explain-plan" class="btn-subtle">
+                  <i data-lucide="git-branch" class="icon-xs"></i>
+                  <span>Explain Query Plan</span>
+                </button>
+              </div>
+            </div>
+            <pre class="sql-code-block full-sql"><code class="language-sql" id="full-sql-code"></code></pre>
+            
+            <div id="explain-plan-container" class="explain-plan-container hidden">
+              <h4><i data-lucide="cpu" class="icon-xs"></i> Execution Plan (EXPLAIN QUERY PLAN)</h4>
+              <div id="explain-plan-output" class="explain-output"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 5: SQL Sandbox / Playground -->
+        <div class="tab-pane" id="tab-playground">
+          <div class="sandbox-card">
+            <div class="sandbox-header">
+              <div>
+                <h3>Interactive SQL Playground</h3>
+                <p>Directly test, tweak, or execute custom SQL queries against the active database.</p>
+              </div>
+              <button id="btn-run-sandbox" class="btn-primary-glow">
+                <i data-lucide="play" class="icon-sm"></i>
+                <span>Execute Sandbox SQL</span>
+              </button>
+            </div>
+            <textarea id="sandbox-textarea" class="sandbox-editor" rows="6" spellcheck="false"></textarea>
+            <div id="sandbox-result-area" class="sandbox-result-area hidden">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Empty State / Welcome Guide (Visible before first query) -->
+      <section id="welcome-section" class="welcome-section">
+        <div class="welcome-card">
+          <div class="welcome-badge">
+            <i data-lucide="bot" class="icon-sm"></i>
+            <span>Next-Generation Autonomous Text-to-SQL</span>
+          </div>
+          <h1>Natural Language Database Intelligence</h1>
+          <p class="welcome-desc">
+            Ask questions in plain conversational English. The AI examines your database schema, writes valid SQL, executes it, and if any database error occurs, <strong>automatically analyzes the traceback and retries until the query succeeds</strong>.
+          </p>
+
+          <div class="features-grid">
+            <div class="feature-item">
+              <div class="feature-icon indigo"><i data-lucide="message-square"></i></div>
+              <div class="feature-text">
+                <h3>Ask in Plain English</h3>
+                <p>Zero SQL knowledge required. Ask complex aggregations, joins, date filters, and ranking questions naturally.</p>
+              </div>
+            </div>
+
+            <div class="feature-item">
+              <div class="feature-icon cyan"><i data-lucide="code-2"></i></div>
+              <div class="feature-text">
+                <h3>LLM Writes the Query</h3>
+                <p>Schema-aware dialect generation with primary/foreign keys and relationship understanding.</p>
+              </div>
+            </div>
+
+            <div class="feature-item">
+              <div class="feature-icon amber"><i data-lucide="refresh-cw"></i></div>
+              <div class="feature-text">
+                <h3>Self-Healing Error Retry</h3>
+                <p>Runtime syntax errors, unknown columns, or grouping issues feed back into the AI to self-correct automatically.</p>
+              </div>
+            </div>
+
+            <div class="feature-item">
+              <div class="feature-icon emerald"><i data-lucide="pie-chart"></i></div>
+              <div class="feature-text">
+                <h3>Answer + Query + Charts</h3>
+                <p>Get instant executive summaries, highlighted SQL queries, data tables, and interactive auto-visualizations.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="test-callout">
+            <div class="test-callout-icon">💡</div>
+            <div class="test-callout-content">
+              <strong>Want to see the Self-Healing Retry Loop in action?</strong>
+              <span>Turn on the <em>"Test Self-Correction"</em> toggle at the top right, then ask any question. Watch the agent detect the simulated column error, inspect the schema, formulate a fix, and succeed!</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <!-- Schema Inspector Modal -->
   <div id="modal-schema" class="modal-overlay hidden">

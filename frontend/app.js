@@ -1,5 +1,6 @@
 /**
  * Text-to-SQL Analyst - Frontend Application Logic
+ * Stage 4 Enterprise Edition: Sidebar Schema Explorer, Interactive KPI Row, Sortable Grid
  */
 
 // Application State
@@ -7,6 +8,7 @@ const state = {
   activeDb: "ecommerce.db",
   databases: [],
   prompts: {},
+  schema: null,
   simulateError: false,
   aiSettings: {
     provider: "offline",
@@ -18,11 +20,22 @@ const state = {
   lastAnalysis: null,
   currentChart: null,
   activeChartType: "bar",
-  isDarkTheme: true
+  isDarkTheme: true,
+  sidebarCollapsed: false,
+  tableSortCol: null,
+  tableSortAsc: true
 };
 
 // DOM Elements
 const elements = {
+  // Navigation & Shell
+  appSidebar: document.getElementById("app-sidebar"),
+  btnToggleSidebar: document.getElementById("btn-toggle-sidebar"),
+  btnRefreshSidebarSchema: document.getElementById("btn-refresh-sidebar-schema"),
+  sidebarTablesContainer: document.getElementById("sidebar-tables-container"),
+  sidebarTableCount: document.getElementById("sidebar-table-count"),
+  sidebarTemplatesContainer: document.getElementById("sidebar-templates-container"),
+
   dbSelect: document.getElementById("db-select"),
   btnInspectSchema: document.getElementById("btn-inspect-schema"),
   simulateErrorToggle: document.getElementById("simulate-error-toggle"),
@@ -31,15 +44,26 @@ const elements = {
   btnThemeToggle: document.getElementById("btn-theme-toggle"),
   themeIcon: document.getElementById("theme-icon"),
   
+  // Prompt Hero
+  statusActiveDb: document.getElementById("status-active-db"),
+  statusActiveAi: document.getElementById("status-active-ai"),
   queryInput: document.getElementById("natural-query-input"),
   btnClearQuery: document.getElementById("btn-clear-query"),
   btnExecuteQuery: document.getElementById("btn-execute-query"),
   promptChipsContainer: document.getElementById("prompt-chips-container"),
 
+  // Sections
   welcomeSection: document.getElementById("welcome-section"),
   retryLoopSection: document.getElementById("retry-loop-section"),
   resultsSection: document.getElementById("results-section"),
 
+  // KPI Row
+  kpiLatency: document.getElementById("kpi-latency"),
+  kpiSafety: document.getElementById("kpi-safety"),
+  kpiRows: document.getElementById("kpi-rows"),
+  kpiAttempts: document.getElementById("kpi-attempts"),
+
+  // Self-Healing Pipeline
   loopDot: document.getElementById("loop-dot"),
   loopTitle: document.getElementById("loop-title"),
   attemptBadge: document.getElementById("attempt-badge"),
@@ -47,6 +71,7 @@ const elements = {
   btnToggleTrace: document.getElementById("btn-toggle-trace"),
   retryTimeline: document.getElementById("retry-timeline"),
 
+  // Results & Tabs
   questionEcho: document.getElementById("question-echo"),
   answerPills: document.getElementById("answer-pills"),
   answerText: document.getElementById("answer-text"),
@@ -78,6 +103,7 @@ const elements = {
   btnRunSandbox: document.getElementById("btn-run-sandbox"),
   sandboxResultArea: document.getElementById("sandbox-result-area"),
 
+  // Modals
   modalSchema: document.getElementById("modal-schema"),
   btnCloseSchema: document.getElementById("btn-close-schema"),
   schemaModalBody: document.getElementById("schema-modal-body"),
@@ -116,7 +142,10 @@ async function init() {
   setupEventListeners();
   await loadDatabases();
   await loadPrompts();
+  await loadSidebarSchema();
   renderPromptChips();
+  renderSidebarTemplates();
+  updateStatusBadges();
   lucide.createIcons();
 }
 
@@ -133,6 +162,11 @@ function loadSavedSettings() {
       document.body.classList.replace("dark-theme", "light-theme");
       elements.themeIcon.setAttribute("data-lucide", "sun");
     }
+    const savedSidebar = localStorage.getItem("t2sql_sidebar");
+    if (savedSidebar === "collapsed") {
+      state.sidebarCollapsed = true;
+      elements.appSidebar.classList.add("collapsed");
+    }
   } catch (e) {
     console.error("Failed to load saved settings", e);
   }
@@ -144,6 +178,18 @@ function saveSettings() {
 
 // Setup Event Listeners
 function setupEventListeners() {
+  // Sidebar Toggle
+  elements.btnToggleSidebar.addEventListener("click", toggleSidebar);
+  elements.btnRefreshSidebarSchema.addEventListener("click", loadSidebarSchema);
+
+  // Keyboard shortcut Ctrl+B for sidebar toggle
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") {
+      e.preventDefault();
+      toggleSidebar();
+    }
+  });
+
   // DB Selector
   elements.dbSelect.addEventListener("change", async (e) => {
     const newDb = e.target.value;
@@ -155,11 +201,14 @@ function setupEventListeners() {
       });
       if (res.ok) {
         state.activeDb = newDb;
+        updateStatusBadges();
+        await loadSidebarSchema();
         renderPromptChips();
-        showToast(`Switched active database to ${newDb}`, "success");
+        renderSidebarTemplates();
+        showToast(`Switched to ${newDb}`, "info");
       }
     } catch (err) {
-      showToast("Error switching database", "error");
+      showToast("Failed to switch database: " + err.message, "error");
     }
   });
 
@@ -167,13 +216,20 @@ function setupEventListeners() {
   elements.simulateErrorToggle.addEventListener("change", (e) => {
     state.simulateError = e.target.checked;
     if (state.simulateError) {
-      showToast("Test Self-Correction mode enabled: Deliberate error will trigger and self-heal on your next query!", "success");
-    } else {
-      showToast("Test Self-Correction mode disabled.", "info");
+      showToast("Self-correction test mode activated. Next query will inject a simulated column error.", "info");
     }
   });
 
-  // Natural Language Input & Execution
+  // Theme Toggle
+  elements.btnThemeToggle.addEventListener("click", toggleTheme);
+
+  // Clear Query Input
+  elements.btnClearQuery.addEventListener("click", () => {
+    elements.queryInput.value = "";
+    elements.queryInput.focus();
+  });
+
+  // Execute Query
   elements.btnExecuteQuery.addEventListener("click", executeNaturalQuery);
   elements.queryInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -182,12 +238,20 @@ function setupEventListeners() {
     }
   });
 
-  elements.btnClearQuery.addEventListener("click", () => {
-    elements.queryInput.value = "";
-    elements.queryInput.focus();
+  // Trace Toggle
+  elements.btnToggleTrace.addEventListener("click", () => {
+    const isHidden = elements.retryTimeline.classList.contains("hidden");
+    elements.retryTimeline.classList.toggle("hidden");
+    elements.btnToggleTrace.textContent = isHidden ? "Hide Trace Details" : "View Trace Details";
   });
 
-  // Tabs Navigation
+  // Jump to SQL Tab
+  elements.btnJumpSql.addEventListener("click", () => {
+    const sandboxTabBtn = document.querySelector('[data-tab="tab-playground"]');
+    if (sandboxTabBtn) sandboxTabBtn.click();
+  });
+
+  // Results Tab Switching
   elements.tabBtns.forEach(btn => {
     btn.addEventListener("click", () => {
       elements.tabBtns.forEach(b => b.classList.remove("active"));
@@ -198,13 +262,18 @@ function setupEventListeners() {
     });
   });
 
-  // Jump from Overview to SQL Tab
-  elements.btnJumpSql.addEventListener("click", () => {
-    const sqlTabBtn = document.querySelector('[data-tab="tab-playground"]');
-    if (sqlTabBtn) sqlTabBtn.click();
+  // Copy SQL
+  elements.btnCopySql.addEventListener("click", () => {
+    if (state.lastAnalysis && state.lastAnalysis.query_used) {
+      navigator.clipboard.writeText(state.lastAnalysis.query_used);
+      showToast("SQL statement copied to clipboard!", "success");
+    }
   });
 
-  // Chart Type Buttons
+  // Export CSV
+  elements.btnExportCsv.addEventListener("click", exportResultsToCsv);
+
+  // Chart Type Selector
   elements.chartTypeBtns.forEach(btn => {
     btn.addEventListener("click", () => {
       elements.chartTypeBtns.forEach(b => b.classList.remove("active"));
@@ -216,35 +285,14 @@ function setupEventListeners() {
     });
   });
 
-  // In-table Search Filter
+  // Table In-line Search
   elements.tableSearch.addEventListener("input", filterTableRows);
 
-  // Copy SQL
-  elements.btnCopySql.addEventListener("click", () => {
-    if (state.lastAnalysis && state.lastAnalysis.query_used) {
-      navigator.clipboard.writeText(state.lastAnalysis.query_used);
-      showToast("SQL Query copied to clipboard!", "success");
-    }
-  });
-
-  // Export CSV
-  elements.btnExportCsv.addEventListener("click", exportResultsToCsv);
-
-  // Explain Query Plan
+  // Run Explain Plan
   elements.btnExplainPlan.addEventListener("click", runExplainPlan);
 
   // Sandbox SQL Execution
   elements.btnRunSandbox.addEventListener("click", runSandboxSql);
-
-  // Theme Toggle
-  elements.btnThemeToggle.addEventListener("click", toggleTheme);
-
-  // Trace Details Toggle
-  elements.btnToggleTrace.addEventListener("click", () => {
-    elements.retryTimeline.classList.toggle("hidden");
-    elements.btnToggleTrace.textContent = elements.retryTimeline.classList.contains("hidden") 
-      ? "View Trace Details" : "Hide Trace Details";
-  });
 
   // Modals Open/Close
   elements.btnInspectSchema.addEventListener("click", openSchemaModal);
@@ -302,6 +350,13 @@ function setupEventListeners() {
   elements.btnConfirmReset.addEventListener("click", handleResetDatabases);
 }
 
+// Toggle Left Sidebar
+function toggleSidebar() {
+  state.sidebarCollapsed = !state.sidebarCollapsed;
+  elements.appSidebar.classList.toggle("collapsed", state.sidebarCollapsed);
+  localStorage.setItem("t2sql_sidebar", state.sidebarCollapsed ? "collapsed" : "expanded");
+}
+
 // Toggle Dark / Light Theme
 function toggleTheme() {
   state.isDarkTheme = !state.isDarkTheme;
@@ -311,6 +366,19 @@ function toggleTheme() {
   } else {
     document.body.classList.replace("dark-theme", "light-theme");
     localStorage.setItem("t2sql_theme", "light");
+  }
+  lucide.createIcons();
+}
+
+// Update Top Status Badges
+function updateStatusBadges() {
+  if (elements.statusActiveDb) {
+    elements.statusActiveDb.innerHTML = `<i data-lucide="database" class="icon-xs"></i> ${state.activeDb}`;
+  }
+  if (elements.statusActiveAi) {
+    const prov = state.aiSettings.provider || "offline";
+    const label = prov === "offline" ? "Offline Smart Engine" : prov.toUpperCase();
+    elements.statusActiveAi.innerHTML = `<i data-lucide="cpu" class="icon-xs"></i> ${label}`;
   }
   lucide.createIcons();
 }
@@ -334,6 +402,85 @@ async function loadDatabases() {
   } catch (err) {
     console.error("Failed to load databases", err);
   }
+}
+
+// Load Schema into Sidebar Accordion
+async function loadSidebarSchema() {
+  try {
+    elements.sidebarTablesContainer.innerHTML = `<div class="loading-spinner-wrapper"><div class="spinner"></div></div>`;
+    const res = await fetch(`/api/schema?db_name=${state.activeDb}`);
+    const data = await res.json();
+    state.schema = data;
+
+    const tables = data.tables || [];
+    elements.sidebarTableCount.textContent = `${tables.length} tables`;
+    elements.sidebarTablesContainer.innerHTML = "";
+
+    if (tables.length === 0) {
+      elements.sidebarTablesContainer.innerHTML = `<p style="font-size:0.78rem;color:var(--text-dim);padding:8px">No tables detected.</p>`;
+      return;
+    }
+
+    tables.forEach((tbl, idx) => {
+      const item = document.createElement("div");
+      item.className = "sidebar-table-item";
+
+      const header = document.createElement("div");
+      header.className = "sidebar-table-header";
+      header.innerHTML = `
+        <div class="sidebar-table-title">
+          <i data-lucide="table" class="icon-xs"></i>
+          <span>${tbl.table_name}</span>
+        </div>
+        <span class="sidebar-row-pill">${tbl.row_count || 0}</span>
+      `;
+
+      const colList = document.createElement("div");
+      colList.className = "sidebar-col-list";
+      colList.style.display = idx === 0 ? "flex" : "none";
+
+      tbl.columns.forEach(col => {
+        const colItem = document.createElement("div");
+        colItem.className = "sidebar-col-item";
+        colItem.title = `Click to insert '${col.name}' into question`;
+        colItem.innerHTML = `
+          <span class="sidebar-col-name">
+            ${col.name} ${col.pk ? '<span class="pk-marker">PK</span>' : ''}
+          </span>
+          <span class="schema-col-type">${col.type}</span>
+        `;
+        colItem.addEventListener("click", () => {
+          insertColumnIntoPrompt(col.name);
+        });
+        colList.appendChild(colItem);
+      });
+
+      header.addEventListener("click", () => {
+        const isShown = colList.style.display === "flex";
+        colList.style.display = isShown ? "none" : "flex";
+      });
+
+      item.appendChild(header);
+      item.appendChild(colList);
+      elements.sidebarTablesContainer.appendChild(item);
+    });
+
+    lucide.createIcons();
+  } catch (err) {
+    elements.sidebarTablesContainer.innerHTML = `<p style="font-size:0.78rem;color:var(--accent-rose);padding:8px">Failed to load schema.</p>`;
+  }
+}
+
+// Insert Column Name into Prompt Input
+function insertColumnIntoPrompt(colName) {
+  const current = elements.queryInput.value;
+  if (!current) {
+    elements.queryInput.value = `Show ${colName} from active database`;
+  } else {
+    elements.queryInput.value = `${current} ${colName}`;
+  }
+  elements.queryInput.focus();
+  showToast(`Inserted '${colName}' into question`, "info");
 }
 
 // Fetch Sample Prompts
@@ -367,6 +514,23 @@ function renderPromptChips() {
   });
 }
 
+// Render Sidebar Prompt Templates
+function renderSidebarTemplates() {
+  elements.sidebarTemplatesContainer.innerHTML = "";
+  const list = state.prompts[state.activeDb] || [];
+  list.forEach(item => {
+    const div = document.createElement("div");
+    div.className = "sidebar-history-item";
+    div.textContent = item.prompt;
+    div.title = "Click to run this query";
+    div.addEventListener("click", () => {
+      elements.queryInput.value = item.prompt;
+      executeNaturalQuery();
+    });
+    elements.sidebarTemplatesContainer.appendChild(div);
+  });
+}
+
 // Run Natural Language Analysis
 async function executeNaturalQuery() {
   const question = elements.queryInput.value.trim();
@@ -390,9 +554,9 @@ async function executeNaturalQuery() {
   elements.retryTimeline.innerHTML = `
     <div class="attempt-card">
       <div class="attempt-card-header">
-        <span class="attempt-num-tag" style="color:var(--amber)"><i data-lucide="loader" class="icon-xs"></i> Formulating initial query...</span>
+        <span class="attempt-num-tag" style="color:var(--accent-amber)"><i data-lucide="loader" class="icon-xs"></i> Formulating initial query...</span>
       </div>
-      <p style="font-size:0.8rem;color:var(--text-dim)">Examining table structures, column mappings, and dialect constraints.</p>
+      <p style="font-size:0.78rem;color:var(--text-dim)">Examining table structures, column mappings, and dialect constraints.</p>
     </div>
   `;
   lucide.createIcons();
@@ -443,22 +607,22 @@ async function executeNaturalQuery() {
 
 // Render Results & Self-Healing Trace
 function renderAnalysisResults(data) {
-  // 1. Render Live Loop Pipeline Card
   const totalAttempts = data.total_attempts;
   const hadRetry = data.had_retry;
 
+  // 1. Update Self-Healing Pipeline Status
   elements.loopDot.className = data.success ? "status-indicator-dot" : "status-indicator-dot failed";
   elements.loopTitle.textContent = data.success
     ? (hadRetry ? `Self-Healing Succeeded! (Resolved on Attempt ${totalAttempts})` : `Query Verified & Executed on First Attempt`)
     : "Max Retries Reached - Query Failed";
 
   elements.attemptBadge.textContent = `${totalAttempts} Attempt${totalAttempts > 1 ? "s" : ""}`;
-  elements.attemptBadge.style.color = hadRetry ? "var(--amber)" : "var(--emerald)";
+  elements.attemptBadge.style.color = hadRetry ? "var(--accent-amber)" : "var(--accent-emerald)";
   elements.loopDuration.innerHTML = `<i data-lucide="timer" class="icon-xs"></i> ${data.total_duration_ms}ms total`;
 
   // Render retry timeline steps
   elements.retryTimeline.innerHTML = "";
-  data.retry_trace.forEach((step, idx) => {
+  data.retry_trace.forEach((step) => {
     const card = document.createElement("div");
     card.className = `attempt-card ${step.status === "success" ? "attempt-success" : "attempt-failed"}`;
     
@@ -466,8 +630,8 @@ function renderAnalysisResults(data) {
       <div class="attempt-card-header">
         <span class="attempt-num-tag">
           ${step.status === "success" 
-            ? `<i data-lucide="check-circle" class="icon-xs"></i> Attempt ${step.attempt}: SUCCESS` 
-            : `<i data-lucide="x-circle" class="icon-xs"></i> Attempt ${step.attempt}: EXECUTION ERROR`}
+            ? `<i data-lucide="check-circle" class="icon-xs" style="color:var(--accent-emerald)"></i> Attempt ${step.attempt}: SUCCESS` 
+            : `<i data-lucide="alert-triangle" class="icon-xs" style="color:var(--accent-amber)"></i> Attempt ${step.attempt}: EXECUTION ERROR`}
         </span>
         <span class="attempt-duration">${step.duration_ms}ms</span>
       </div>
@@ -487,7 +651,7 @@ function renderAnalysisResults(data) {
       `;
     } else {
       html += `
-        <div style="margin-top:6px;font-size:0.75rem;color:var(--emerald)">
+        <div style="margin-top:6px;font-size:0.75rem;color:var(--accent-emerald)">
           &check; Validated result set: <strong>${step.rows_count} rows</strong> returned.
         </div>
       `;
@@ -497,7 +661,13 @@ function renderAnalysisResults(data) {
     elements.retryTimeline.appendChild(card);
   });
 
-  // 2. Render Results Section
+  // 2. Populate Executive KPI Cards
+  elements.kpiLatency.textContent = `${data.execution_time_ms} ms`;
+  elements.kpiSafety.textContent = "AST Sandboxed";
+  elements.kpiRows.textContent = `${data.total_rows} row${data.total_rows === 1 ? '' : 's'}`;
+  elements.kpiAttempts.textContent = hadRetry ? `Attempt ${totalAttempts} (Self-Healed)` : "1 Attempt (Clean)";
+
+  // 3. Render Results Workspace
   elements.resultsSection.classList.remove("hidden");
 
   // Overview Tab
@@ -508,7 +678,7 @@ function renderAnalysisResults(data) {
   elements.answerPills.innerHTML = `
     <span class="pill-item success"><i data-lucide="check" class="icon-xs"></i> ${data.success ? 'Success' : 'Failed'}</span>
     <span class="pill-item ${hadRetry ? 'retried' : ''}"><i data-lucide="refresh-cw" class="icon-xs"></i> ${totalAttempts} Attempt${totalAttempts > 1 ? 's' : ''}</span>
-    <span class="pill-item"><i data-lucide="zap" class="icon-xs"></i> ${data.execution_time_ms}ms query execution</span>
+    <span class="pill-item"><i data-lucide="zap" class="icon-xs"></i> ${data.execution_time_ms}ms</span>
     <span class="pill-item"><i data-lucide="database" class="icon-xs"></i> ${data.database}</span>
   `;
 
@@ -525,16 +695,15 @@ function renderAnalysisResults(data) {
   // Populate Sandbox
   elements.sandboxTextarea.value = data.query_used;
 
-  // 3. Render Data Table
+  // 4. Render Data Table
   renderDataTable(data.columns, data.rows, data.total_rows);
 
-  // 4. Render Chart
+  // 5. Render Chart
   if (data.chart_data && data.chart_data.datasets && data.chart_data.datasets.length > 0) {
     elements.noChartMsg.classList.add("hidden");
     elements.analyticsChart.classList.remove("hidden");
     state.activeChartType = data.chart_data.type || "bar";
     
-    // Set active button
     elements.chartTypeBtns.forEach(b => {
       b.classList.toggle("active", b.dataset.chart === state.activeChartType);
     });
@@ -556,7 +725,7 @@ function renderAnalysisResults(data) {
   lucide.createIcons();
 }
 
-// Render Data Table
+// Render Sortable Data Table
 function renderDataTable(columns, rows, totalRows) {
   elements.resultRowCount.textContent = totalRows;
   elements.tableStats.textContent = `Showing ${rows.length} of ${totalRows} rows`;
@@ -570,16 +739,40 @@ function renderDataTable(columns, rows, totalRows) {
     return;
   }
 
-  // Header
+  // Header with sorting support
   const trHead = document.createElement("tr");
   columns.forEach(col => {
     const th = document.createElement("th");
-    th.textContent = col;
+    const isSorted = state.tableSortCol === col;
+    const arrow = isSorted ? (state.tableSortAsc ? " ▲" : " ▼") : "";
+    th.textContent = `${col}${arrow}`;
+    th.title = `Click to sort by ${col}`;
+    th.addEventListener("click", () => {
+      if (state.tableSortCol === col) {
+        state.tableSortAsc = !state.tableSortAsc;
+      } else {
+        state.tableSortCol = col;
+        state.tableSortAsc = true;
+      }
+      const sortedRows = [...rows].sort((a, b) => {
+        let valA = a[col];
+        let valB = b[col];
+        if (valA === null) return 1;
+        if (valB === null) return -1;
+        if (typeof valA === "number" && typeof valB === "number") {
+          return state.tableSortAsc ? valA - valB : valB - valA;
+        }
+        return state.tableSortAsc 
+          ? String(valA).localeCompare(String(valB)) 
+          : String(valB).localeCompare(String(valA));
+      });
+      renderDataTable(columns, sortedRows, totalRows);
+    });
     trHead.appendChild(th);
   });
   elements.tableHead.appendChild(trHead);
 
-  // Rows
+  // Table Rows
   rows.forEach(r => {
     const tr = document.createElement("tr");
     columns.forEach(col => {
@@ -614,7 +807,7 @@ function filterTableRows() {
   elements.tableStats.textContent = `Filtered ${visibleCount} row${visibleCount === 1 ? '' : 's'}`;
 }
 
-// Render Chart with Chart.js
+// Render Chart with High-End Palette
 function renderChart(chartConfig, chartType = "bar") {
   if (state.currentChart) {
     state.currentChart.destroy();
@@ -627,11 +820,25 @@ function renderChart(chartConfig, chartType = "bar") {
   const textColor = isDark ? "#94a3b8" : "#475569";
   const gridColor = isDark ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.06)";
 
+  // Enhanced dataset styles
+  const modernPalette = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#f43f5e"];
+  const styledDatasets = chartConfig.datasets.map((ds, idx) => {
+    const color = modernPalette[idx % modernPalette.length];
+    return {
+      ...ds,
+      backgroundColor: chartType === "doughnut" ? modernPalette : color,
+      borderColor: chartType === "line" ? color : "transparent",
+      borderRadius: chartType === "bar" ? 6 : 0,
+      tension: 0.35,
+      borderWidth: 2
+    };
+  });
+
   state.currentChart = new Chart(ctx, {
     type: chartType,
     data: {
       labels: chartConfig.labels,
-      datasets: chartConfig.datasets
+      datasets: styledDatasets
     },
     options: {
       responsive: true,
@@ -640,15 +847,15 @@ function renderChart(chartConfig, chartType = "bar") {
         legend: {
           display: true,
           position: "top",
-          labels: { color: textColor, font: { family: "Plus Jakarta Sans", size: 12 } }
+          labels: { color: textColor, font: { family: "Plus Jakarta Sans", size: 12, weight: 600 } }
         },
         tooltip: {
-          backgroundColor: "#0f172a",
-          titleColor: "#f8fafc",
-          bodyColor: "#cbd5e1",
-          borderColor: "rgba(255, 255, 255, 0.1)",
+          backgroundColor: isDark ? "#111827" : "#ffffff",
+          titleColor: isDark ? "#f8fafc" : "#0f172a",
+          bodyColor: isDark ? "#cbd5e1" : "#475569",
+          borderColor: isDark ? "rgba(255, 255, 255, 0.12)" : "#e2e8f0",
           borderWidth: 1,
-          padding: 10,
+          padding: 12,
           cornerRadius: 8
         }
       },
@@ -719,7 +926,7 @@ async function runSandboxSql() {
     const data = await res.json();
     if (data.success) {
       let tableHtml = `
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:0.8rem;color:var(--emerald)">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:0.8rem;color:var(--accent-emerald)">
           <span>&check; Executed in ${data.execution_time_ms}ms</span>
           <span>${data.total_rows} rows</span>
         </div>
@@ -793,7 +1000,7 @@ async function openSchemaModal() {
     elements.schemaModalBody.innerHTML = html;
     lucide.createIcons();
   } catch (err) {
-    elements.schemaModalBody.innerHTML = `<p style="color:var(--rose)">Failed to inspect schema: ${err.message}</p>`;
+    elements.schemaModalBody.innerHTML = `<p style="color:var(--accent-rose)">Failed to inspect schema: ${err.message}</p>`;
   }
 }
 
@@ -815,6 +1022,7 @@ function handleSaveSettings() {
   state.aiSettings.baseUrl = elements.settingBaseUrl.value.trim();
   state.aiSettings.maxRetries = parseInt(elements.settingMaxRetries.value);
   saveSettings();
+  updateStatusBadges();
   elements.modalSettings.classList.add("hidden");
   showToast("AI preferences saved successfully!", "success");
 }
@@ -824,7 +1032,7 @@ async function handleDbFileUpload(e) {
   const file = e.target.files[0];
   if (!file) return;
 
-  elements.dbUploadStatus.innerHTML = `<span style="color:var(--primary)">Uploading ${file.name}...</span>`;
+  elements.dbUploadStatus.innerHTML = `<span style="color:var(--primary-light)">Uploading ${file.name}...</span>`;
   const formData = new FormData();
   formData.append("file", file);
 
@@ -832,15 +1040,16 @@ async function handleDbFileUpload(e) {
     const res = await fetch("/api/upload/db", { method: "POST", body: formData });
     const data = await res.json();
     if (res.ok) {
-      elements.dbUploadStatus.innerHTML = `<span style="color:var(--emerald)">&check; ${data.message}</span>`;
+      elements.dbUploadStatus.innerHTML = `<span style="color:var(--accent-emerald)">&check; ${data.message}</span>`;
       await loadDatabases();
+      await loadSidebarSchema();
       showToast(`Loaded ${data.active_db}!`, "success");
       setTimeout(() => elements.modalUpload.classList.add("hidden"), 1200);
     } else {
-      elements.dbUploadStatus.innerHTML = `<span style="color:var(--rose)">Error: ${data.detail}</span>`;
+      elements.dbUploadStatus.innerHTML = `<span style="color:var(--accent-rose)">Error: ${data.detail}</span>`;
     }
   } catch (err) {
-    elements.dbUploadStatus.innerHTML = `<span style="color:var(--rose)">Upload error: ${err.message}</span>`;
+    elements.dbUploadStatus.innerHTML = `<span style="color:var(--accent-rose)">Upload error: ${err.message}</span>`;
   }
 }
 
@@ -849,7 +1058,7 @@ async function handleCsvFileUpload(e) {
   const tblName = elements.csvTableName.value.trim() || file.name.replace(".csv", "").replace(/[^a-zA-Z0-9_]/g, "_");
   if (!file) return;
 
-  elements.csvUploadStatus.innerHTML = `<span style="color:var(--primary)">Converting ${file.name} to table '${tblName}'...</span>`;
+  elements.csvUploadStatus.innerHTML = `<span style="color:var(--primary-light)">Converting ${file.name} to table '${tblName}'...</span>`;
   const formData = new FormData();
   formData.append("file", file);
   formData.append("table_name", tblName);
@@ -859,14 +1068,15 @@ async function handleCsvFileUpload(e) {
     const res = await fetch("/api/upload/csv", { method: "POST", body: formData });
     const data = await res.json();
     if (res.ok) {
-      elements.csvUploadStatus.innerHTML = `<span style="color:var(--emerald)">&check; ${data.message}</span>`;
+      elements.csvUploadStatus.innerHTML = `<span style="color:var(--accent-emerald)">&check; ${data.message}</span>`;
       showToast(data.message, "success");
+      await loadSidebarSchema();
       setTimeout(() => elements.modalUpload.classList.add("hidden"), 1200);
     } else {
-      elements.csvUploadStatus.innerHTML = `<span style="color:var(--rose)">Error: ${data.detail}</span>`;
+      elements.csvUploadStatus.innerHTML = `<span style="color:var(--accent-rose)">Error: ${data.detail}</span>`;
     }
   } catch (err) {
-    elements.csvUploadStatus.innerHTML = `<span style="color:var(--rose)">CSV error: ${err.message}</span>`;
+    elements.csvUploadStatus.innerHTML = `<span style="color:var(--accent-rose)">CSV error: ${err.message}</span>`;
   }
 }
 
@@ -879,6 +1089,7 @@ async function handleResetDatabases() {
     if (res.ok) {
       showToast("Databases reset to initial clean state!", "success");
       await loadDatabases();
+      await loadSidebarSchema();
       elements.modalUpload.classList.add("hidden");
     }
   } catch (err) {
@@ -941,12 +1152,9 @@ function showToast(message, type = "info") {
 function renderMarkdown(text) {
   if (!text) return "";
   let html = escapeHtml(text);
-  // Bold **word**
   html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-  // Italic *word*
   html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
-  // Inline code `code`
-  html = html.replace(/`(.*?)`/g, "<code style='background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:4px;font-family:var(--font-mono);font-size:0.85em'>$1</code>");
+  html = html.replace(/`(.*?)`/g, "<code style='background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;font-family:var(--font-mono);font-size:0.85em'>$1</code>");
   return html;
 }
 

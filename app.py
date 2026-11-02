@@ -102,98 +102,124 @@ if "conversation_session" not in st.session_state:
     from src.conversation import ConversationSession
     st.session_state.conversation_session = ConversationSession(data_source="sample:business.db")
 
-# Custom CSS for high-contrast, polished dashboard
+# Custom CSS for high-contrast, polished enterprise dashboard
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    }
+    
+    code, pre, .stCodeBlock {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+
+    .main-title {
+        font-size: 2.2rem;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        margin-bottom: 0.15rem;
+        background: linear-gradient(135deg, #4f46e5 0%, #0ea5e9 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    
+    .sub-title {
+        color: #94a3b8;
+        font-size: 0.95rem;
+        font-weight: 400;
+        margin-bottom: 1.5rem;
+    }
+
     .delta-card {
-        background: rgba(14, 165, 233, 0.15);
-        border: 1px solid rgba(14, 165, 233, 0.45);
+        background: rgba(14, 165, 233, 0.1);
+        border: 1px solid rgba(14, 165, 233, 0.35);
         border-radius: 10px;
-        padding: 12px 18px;
+        padding: 14px 18px;
         margin-bottom: 1.2rem;
         color: #38bdf8;
         font-size: 0.92rem;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     }
+    
     .delta-title {
         font-weight: 700;
         display: block;
         margin-bottom: 4px;
         color: #7dd3fc;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
-    .main-title {
-        font-size: 2.2rem;
-        font-weight: 800;
-        letter-spacing: -0.02em;
-        margin-bottom: 0.2rem;
-        background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    .sub-title {
-        color: #94a3b8;
-        font-size: 0.95rem;
-        margin-bottom: 1.5rem;
-    }
+
     .status-card-demo {
-        background: rgba(99, 102, 241, 0.12);
-        border: 1px solid rgba(99, 102, 241, 0.35);
+        background: rgba(79, 70, 229, 0.1);
+        border: 1px solid rgba(79, 70, 229, 0.3);
         border-radius: 10px;
         padding: 12px 16px;
         margin-bottom: 1rem;
         color: #cbd5e1;
         font-size: 0.88rem;
     }
+    
     .status-card-live {
-        background: rgba(16, 185, 129, 0.12);
-        border: 1px solid rgba(16, 185, 129, 0.35);
+        background: rgba(16, 185, 129, 0.1);
+        border: 1px solid rgba(16, 185, 129, 0.3);
         border-radius: 10px;
         padding: 12px 16px;
         margin-bottom: 1rem;
         color: #a7f3d0;
         font-size: 0.88rem;
     }
+
     .clarification-card {
-        background: rgba(245, 158, 11, 0.12);
-        border: 1px solid rgba(245, 158, 11, 0.4);
+        background: rgba(245, 158, 11, 0.1);
+        border: 1px solid rgba(245, 158, 11, 0.35);
         border-radius: 10px;
         padding: 16px 20px;
         margin-bottom: 1.5rem;
     }
+    
     .clarification-title {
         color: #f59e0b;
         font-size: 1.05rem;
         font-weight: 700;
         margin-bottom: 6px;
     }
+
     .retry-box-fail {
-        background: rgba(244, 63, 94, 0.1);
+        background: rgba(244, 63, 94, 0.08);
         border-left: 4px solid #f43f5e;
-        padding: 10px 14px;
+        padding: 12px 16px;
         border-radius: 6px;
         margin-bottom: 8px;
         font-size: 0.85rem;
     }
+    
     .retry-box-succ {
-        background: rgba(16, 185, 129, 0.1);
+        background: rgba(16, 185, 129, 0.08);
         border-left: 4px solid #10b981;
-        padding: 10px 14px;
+        padding: 12px 16px;
         border-radius: 6px;
         margin-bottom: 8px;
         font-size: 0.85rem;
     }
+
     .badge-validation {
-        background: rgba(244, 63, 94, 0.2);
+        background: rgba(244, 63, 94, 0.15);
         color: #f43f5e;
-        border: 1px solid rgba(244, 63, 94, 0.4);
+        border: 1px solid rgba(244, 63, 94, 0.35);
         padding: 2px 8px;
         border-radius: 4px;
         font-size: 0.75rem;
         font-weight: 700;
     }
+    
     .badge-database {
-        background: rgba(245, 158, 11, 0.2);
+        background: rgba(245, 158, 11, 0.15);
         color: #f59e0b;
-        border: 1px solid rgba(245, 158, 11, 0.4);
+        border: 1px solid rgba(245, 158, 11, 0.35);
         padding: 2px 8px;
         border-radius: 4px;
         font-size: 0.75rem;
