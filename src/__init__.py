@@ -50,5 +50,15 @@ __all__ = [
     "cleanup_temp_database",
     "sanitize_table_name",
     "sanitize_column_names",
-    "MAX_UPLOAD_SIZE_BYTES"
+    "MAX_UPLOAD_SIZE_BYTES",
+    "ConversationTurn",
+    "ConversationSession",
+    "ConversationManager"
 ]
+
+from src.conversation import (
+    ConversationTurn,
+    ConversationSession,
+    ConversationManager
+)
+

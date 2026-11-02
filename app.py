@@ -67,7 +67,7 @@ from src.upload_handler import (
 
 # Streamlit Page Setup
 st.set_page_config(
-    page_title="Text-to-SQL Analyst AI | Stage 3",
+    page_title="Text-to-SQL Analyst AI | Stage 4",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -98,9 +98,28 @@ if "active_question" not in st.session_state:
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
 
+if "conversation_session" not in st.session_state:
+    from src.conversation import ConversationSession
+    st.session_state.conversation_session = ConversationSession(data_source="sample:business.db")
+
 # Custom CSS for high-contrast, polished dashboard
 st.markdown("""
 <style>
+    .delta-card {
+        background: rgba(14, 165, 233, 0.15);
+        border: 1px solid rgba(14, 165, 233, 0.45);
+        border-radius: 10px;
+        padding: 12px 18px;
+        margin-bottom: 1.2rem;
+        color: #38bdf8;
+        font-size: 0.92rem;
+    }
+    .delta-title {
+        font-weight: 700;
+        display: block;
+        margin-bottom: 4px;
+        color: #7dd3fc;
+    }
     .main-title {
         font-size: 2.2rem;
         font-weight: 800;
@@ -351,6 +370,7 @@ with st.sidebar:
                         st.session_state.db_manager = new_db
                         st.session_state.uploaded_source_name = uploaded_sqlite.name
                         st.session_state.last_uploaded_key = upload_key
+                        st.session_state.conversation_session.set_data_source(f"sqlite:{uploaded_sqlite.name}")
                         summary = new_db.get_schema_summary()
                         first_tbl = summary["tables"][0]["table_name"] if summary["tables"] else "data"
                         st.session_state.active_question = f"Show top 10 records from {first_tbl}"
@@ -391,9 +411,33 @@ with st.sidebar:
             st.session_state.db_manager = st.session_state.sample_db_manager
             st.session_state.data_source_mode = "sample"
             st.session_state.uploaded_source_name = "business.db"
+            st.session_state.conversation_session.set_data_source("sample:business.db")
             st.session_state.active_question = "Show top 5 customers by total spending and order count"
             st.session_state.last_uploaded_key = None
             st.rerun()
+
+    # Multi-Turn Conversation Controls in Sidebar
+    st.markdown("---")
+    st.markdown("### 💬 Conversational Context")
+    sess = st.session_state.conversation_session
+    st.caption(f"Turns in Memory: **{sess.turn_count}** &bull; Dataset: `{st.session_state.uploaded_source_name}`")
+    if sess.turn_count > 0:
+        if st.button("🗑️ Clear Conversation History", use_container_width=True):
+            sess.clear()
+            st.session_state.last_result = None
+            st.success("Conversation history cleared!")
+            st.rerun()
+
+        with st.expander("📜 Inspect Conversation Turns", expanded=False):
+            for t in sess.get_history():
+                st.markdown(f"**Turn {t.turn_id}:** {t.question}")
+                if t.delta_explanation:
+                    st.caption(f"⚡ {t.delta_explanation}")
+                if t.sql:
+                    st.code(t.sql, language="sql")
+                if t.error_message:
+                    st.caption(f"❌ Error: {t.error_message}")
+                st.markdown("---")
 
     with st.expander("📝 Observability & Diagnostic Logs"):
         events = observability.get_events(limit=25)
@@ -407,7 +451,7 @@ with st.sidebar:
 # Main Panel: Natural Language Analyst
 # ---------------------------------------------------------
 st.markdown('<div class="main-title">Text-to-SQL Analyst AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Stage 3: Multi-Domain Database &bull; CSV Upload &bull; AST Safety &bull; Bounded Self-Healing</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Stage 4: Multi-Domain Database &bull; Conversational Analytics &bull; AST Safety &bull; Bounded Self-Healing</div>', unsafe_allow_html=True)
 
 # Provider status badge
 if selected_provider_key == "demo" or not providers_info[selected_provider_key]["available"]:
@@ -470,13 +514,30 @@ if sample_queries:
     for i, (label, sample_q) in enumerate(sample_queries):
         if chip_cols[i].button(label, key=f"chip_{i}"):
             st.session_state.active_question = sample_q
+            st.rerun()
 
+# Conversational Follow-Up Chips (when previous turn context exists)
+sess = st.session_state.conversation_session
+if sess.turn_count > 0:
+    st.markdown("##### 💬 Suggested Follow-Up Refinements:")
+    follow_up_chips = [
+        ("Top 3 of those", "Show only top 3 of those"),
+        ("Lowest instead", "Show lowest instead"),
+        ("Count total", "How many total records?"),
+        ("Platinum Tier", "Filter to only platinum loyalty tier"),
+        ("Show Emails", "Show their email addresses")
+    ]
+    f_cols = st.columns(len(follow_up_chips))
+    for i, (f_lbl, f_q) in enumerate(follow_up_chips):
+        if f_cols[i].button(f_lbl, key=f"follow_chip_{i}"):
+            st.session_state.active_question = f_q
+            st.rerun()
 
 # Question Input Bar
 user_question = st.text_input(
-    "Ask anything in plain English:",
+    "Ask anything in plain English (or follow up on previous results):",
     value=st.session_state.active_question,
-    placeholder="e.g., Show top 5 customers by total spending",
+    placeholder="e.g., Show top 5 customers by total spending, or 'Show top 3 of those'",
     key="input_box"
 )
 
@@ -487,7 +548,8 @@ if run_clicked and user_question.strip():
     with st.spinner("Analyzing question, generating structured SQL, and validating through safety gates..."):
         pipeline = TextToSqlPipeline(
             db_manager=st.session_state.db_manager,
-            llm_adapter=active_adapter
+            llm_adapter=active_adapter,
+            session=st.session_state.conversation_session
         )
         result: PipelineResult = pipeline.run(
             question=user_question.strip(),
@@ -502,6 +564,16 @@ if st.session_state.last_result:
     res: PipelineResult = st.session_state.last_result
 
     st.markdown("---")
+
+    # Conversational Follow-Up Delta Card
+    if res.delta_explanation:
+        turn_num = res.turn_id or st.session_state.conversation_session.turn_count
+        st.markdown(f"""
+        <div class="delta-card">
+            <span class="delta-title">💬 Conversational Context Refinement Applied (Turn #{turn_num})</span>
+            <div>{res.delta_explanation}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Ambiguity Clarification Handling
     if res.needs_clarification:

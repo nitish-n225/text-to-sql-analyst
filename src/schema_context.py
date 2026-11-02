@@ -284,12 +284,16 @@ class SchemaContextBuilder:
 
         return True, None
 
-    def detect_ambiguity(self, question: str) -> Tuple[bool, Optional[str], List[str]]:
+    def detect_ambiguity(self, question: str, has_context: bool = False) -> Tuple[bool, Optional[str], List[str]]:
         """
         Identifies whether a natural language question is ambiguous or underspecified,
         providing clarifying questions and options for the user.
         """
         q = question.strip().lower()
+
+        # If this is a conversational follow-up referencing previous turn context
+        if has_context and any(w in q for w in ["those", "them", "these", "their", "of which", "instead", "lowest", "top 3", "top 1", "only 3"]):
+            return (False, None, [])
 
         # Check if the query specifies an exact column from the active schema
         schema = self.get_full_schema()

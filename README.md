@@ -1,47 +1,62 @@
-# ⚡ Text-to-SQL Analyst AI (Stage 3: Multi-Domain Database & CSV Upload)
+# ⚡ Text-to-SQL Analyst AI (Stage 4: Multi-Domain Database & Conversational Analytics)
 
-An autonomous, safety-first **Text-to-SQL Analyst** application built in Python using **Streamlit**, **SQLite**, **SQLAlchemy**, **pandas**, **Plotly**, and **sqlglot**.
+An autonomous, safety-first **Text-to-SQL Analyst** application equipped with **Multi-Turn Conversational Analytics**, **Context Management**, **AST Safety Enforcement**, **Bounded Self-Correction Retries**, and **Multi-Domain Database Support**.
 
-Ask analytical business questions in plain English. The AI translates questions into valid SQLite queries against your live database schema, validates safety gates, executes queries in a read-only sandbox, auto-corrects recoverable errors through a bounded self-healing retry loop (at most 2 retries), and renders an executive summary, structured explanations, assumptions, interactive Plotly visualizations, and data tables.
+The system features two production-ready application stacks:
+1. **Interactive Streamlit Analyst Dashboard (`app.py`)**: Multi-turn dialogue, context refinement chips, delta-explanation cards, schema inspection, and Plotly visualizations.
+2. **FastAPI REST Engine + Responsive Web Application (`backend/` & `frontend/`)**: High-performance asynchronous API with real-time database schema reflection, self-healing retries, and a modern single-page dashboard.
 
 ---
 
-## 🎯 Stage 3 Features & Guarantees
+## 🎯 Stage 4 Features & System Architecture
 
-### Feature 1: Multi-Domain Database & CSV Upload (`src/upload_handler.py`)
-1. **Three Selectable Data Sources**:
-   - **Sample Business Database (Default)**: Pre-seeded eCommerce database with 4 relational tables (`customers`, `orders`, `order_items`, `products`).
-   - **Upload Custom CSV (`.csv`)**: Converts any uploaded CSV file into a temporary in-memory/ephemeral SQLite table. Automatically sanitizes table and column names to ensure valid SQL identifiers.
-   - **Upload Custom SQLite Database (`.db`, `.sqlite`, `.sqlite3`)**: Validates the SQLite 3 magic header, runs integrity checks, inspects all user tables, and reflects foreign key relationships dynamically.
-2. **Ephemeral Cloud Storage (Streamlit Cloud Compatible)**:
-   - Uses temporary storage (`tempfile`) with automatic resource disposal and disk cleanup.
-   - No reliance on persistent disk storage across cloud container restarts.
-   - Immediate cleanup when switching data sources or closing sessions.
-3. **Rigorous File Validation & Error Sanitization**:
-   - Strictly validates extensions and binary magic headers (`SQLite format 3\000`).
-   - Caps upload size at 25 MB.
-   - Catches corrupted, empty, or unparseable files with clean user feedback, preventing sensitive path or stack trace leakage in logs and UI.
-4. **Dynamic Schema-Aware Natural Language Querying**:
-   - Automatically reflects table names, column names, data types, primary keys, and foreign keys for uploaded datasets.
-   - In **Demo Mode (Offline)**: Intelligently formulates exploratory queries, aggregations, counts, and top-N rankings against uploaded tables without external LLM calls.
-   - In **Live Mode (Gemini / OpenAI)**: Supplies complete schema context, data types, and sample records to the model.
-5. **Universal AST Safety Gates & Read-Only Sandboxing**:
-   - All queries on uploaded datasets are strictly enforced through AST validation (`sqlglot`).
-   - Only single read-only `SELECT` and safe `WITH ... SELECT` queries are allowed.
-   - Destructive commands (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `ATTACH`, `PRAGMA`) are blocked before database execution.
-   - SQLite read-only connection URI (`mode=ro`) and `PRAGMA query_only = ON` provide defense-in-depth.
+### Feature 1: Multi-Turn Conversational Analytics (`src/conversation.py`)
+1. **Context-Aware Dialogue Management**:
+   - Maintains an in-memory chronological history of user turns (`ConversationTurn`), tracking user questions, generated SQL, execution metrics, and delta explanations.
+   - Prevents prompt bloating by automatically bounding prompt context to the most recent successful turns (default: 3).
+2. **Conversational Follow-Up Resolution & Delta Explanations**:
+   - Supports natural follow-up queries that reference previous results:
+     - **Limit Adjustments**: e.g., *"Show only top 3 of those"* -> updates `LIMIT` to 3.
+     - **Sort Inversions**: e.g., *"Show lowest instead"* -> switches `DESC` to `ASC`.
+     - **Aggregations & Counts**: e.g., *"How many total records?"* -> wraps query in `COUNT(*)`.
+     - **Column Projections**: e.g., *"Show their email addresses"* -> joins and projects contact fields.
+   - Generates a clear `delta_explanation` detailing exactly how the prior query was adapted to fulfill the follow-up intent.
+3. **Data Source Isolation Rule**:
+   - Switching between datasets (e.g., from Sample Business DB to an uploaded CSV or SQLite file) immediately flushes active conversation history, preventing table or column hallucinations across unrelated schemas.
+4. **Conversational Ambiguity Handling (`src/schema_context.py`)**:
+   - Distinguishes between vague initial questions and valid conversational follow-ups. Words like *"those"*, *"top 3"*, or *"lowest"* are recognized as context modifiers rather than ambiguous inputs when prior turns exist.
+
+---
+
+### Feature 2: Multi-Domain Relational Databases (`backend/seed_data.py`)
+Pre-seeded with realistic, relational SQLite databases across three commercial domains:
+- **E-Commerce & Retail (`ecommerce.db`)**: 50 customers, 20 products, 166 orders, and 273 line items.
+- **Company HR & Analytics (`company_hr.db`)**: 6 departments, 30 employees, and active projects with budget allocations.
+- **Hospital & Healthcare (`healthcare.db`)**: 10 doctors across specializations, 40 patients, and 60 clinical appointments with diagnoses and prescription tracking.
+
+---
+
+### Feature 3: AST Safety Sandboxing & Bounded Self-Healing
+1. **sqlglot AST Validator (`src/validator.py`)**:
+   - Strict read-only enforcement: only single `SELECT` or `WITH ... SELECT` statements are permitted.
+   - Hard blocks on destructive keywords (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, `ATTACH`, `PRAGMA`).
+   - Re-validates every self-healed query generated during retry attempts.
+2. **Database-Level Protection (`src/database.py` & `backend/db_manager.py`)**:
+   - SQLite read-only connection URI (`mode=ro`) and `PRAGMA query_only = ON`.
+   - Hard row limit caps (default: 500 rows) and execution timeouts (default: 5.0 seconds).
+3. **Self-Healing Error Feedback Loop**:
+   - When SQLite reports an error (e.g. unknown column, missing join), the error message is sanitized and fed back into the model for up to 2 correction attempts.
 
 ---
 
 ## 🚀 Quickstart Guide (Windows PowerShell)
 
 ### Step 1: Open Terminal in Project Directory
-Open **Windows PowerShell** in this project folder:
 ```powershell
 cd "c:\Users\NITISH I D\Downloads\New folder (5)"
 ```
 
-### Step 2: (Optional) Create & Activate Virtual Environment
+### Step 2: (Optional) Activate Virtual Environment
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -52,29 +67,48 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### Step 4: Run Automated Tests
-Verify all 41 unit tests across upload handling, validator, database sandboxing, schema builder, demo mode, and bounded retries:
+### Step 4: Seed Sample Databases
+```powershell
+python backend/seed_data.py
+```
+
+### Step 5: Run the Complete Automated Test Suite (64 Tests)
 ```powershell
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-### Step 5: Launch Streamlit Application
+---
+
+## 💻 Running the Applications
+
+### Option A: Launch Streamlit Analyst Dashboard
 ```powershell
 streamlit run app.py
 ```
-The application will open in your default browser at `http://localhost:8501`.
+- Open `http://localhost:8501` in your browser.
+- Enjoy interactive conversational querying, follow-up chips, Plotly visualizations, CSV downloads, and retry trace inspection.
+
+### Option B: Launch FastAPI Backend & Modern Web UI
+```powershell
+python backend/main.py
+```
+or via Uvicorn:
+```powershell
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+```
+- Open `http://localhost:8000` in your browser to access the responsive web dashboard.
+- Access interactive OpenAPI documentation at `http://localhost:8000/docs`.
 
 ---
 
 ## ⚙️ Configuration (Live LLM Mode)
 
-To run with real LLM providers instead of Demo Mode:
-
+To enable live Google Gemini or OpenAI language models:
 1. Copy `.env.example` to `.env`:
    ```powershell
    Copy-Item .env.example .env
    ```
-2. Open `.env` in any text editor and paste your API key(s):
+2. Configure your API keys:
    ```env
    # Google Gemini
    GEMINI_API_KEY=AIzaSy...
@@ -84,73 +118,82 @@ To run with real LLM providers instead of Demo Mode:
    OPENAI_API_KEY=sk-proj-...
    OPENAI_MODEL=gpt-4o-mini
    ```
-3. Restart or reload the Streamlit app. The sidebar will detect your environment variable and allow switching to Live Mode.
-
-> **Note on Demo Mode:** If no API keys are configured, the app operates automatically in **Demo Mode**.
+3. Restart the application. If no API keys are configured, both stacks seamlessly fall back to deterministic **Smart Demo / Offline Mode**.
 
 ---
 
-## 🧪 Testing Coverage (41 Unit Tests)
+## 🧪 Testing Coverage (64 Passing Tests)
 
-The automated test suite in `tests/` covers:
-- `test_stage3_uploads.py` (7 tests):
-  - Valid CSV file upload, schema reflection, query generation, and execution.
-  - Multi-table SQLite database upload, table and foreign key discovery.
-  - Invalid, empty, oversized (>25 MB), and corrupted file rejections.
-  - Table and column identifier sanitization (reserved keywords, punctuation, deduplication).
-  - Destructive SQL blocked on uploaded datasets via AST validator and database sandbox.
-  - Ephemeral temporary file lifecycle and cleanup without disk leakage.
-  - Regression testing verifying sample business database functionality remains intact.
-- `test_validator.py` (12 tests): Safe `SELECT`/`WITH` queries, blocked write operations (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`), blocked multi-statements, and blocked pragmas.
-- `test_database.py` (5 tests): Schema tables verification, record counts, and database-level read-only constraint verification (`PRAGMA query_only = ON`).
-- `test_demo_mode.py` (2 tests): Deterministic demo queries, schema prompt generation, and disclosure compliance.
-- `test_pipeline.py` (5 tests): Error sanitization, bounded self-healing retries, revalidation of retried queries, and max retry boundaries.
-- `test_stage2_advanced.py` (10 tests):
-  - Multi-table JOINs across all 4 tables (`customers` -> `orders` -> `order_items` -> `products`).
-  - Aggregations (`SUM`, `COUNT`), date filters (`strftime`), and `HAVING` clauses.
-  - Semantic schema validation detecting hallucinated tables and columns.
-  - Socratic ambiguity detection and clarification options.
-  - Strict revalidation of retried queries.
-  - Maximum retry boundary (3 attempts max).
-  - Destructive SQL blocked during correction retries.
-  - 100% offline demo mode operation.
-  - Structured output fields (`explanation`, `assumptions`).
-  - Diagnostic logging and secrets redaction.
-
-Run all tests anytime with:
-```powershell
-python -m unittest discover -s tests -p "test_*.py" -v
-```
+The test suite consists of 64 unit and integration tests across 8 test suites:
+- `tests/test_stage4_conversation.py` (11 tests):
+  - Conversation turn records, session hygiene, bounded history pruning.
+  - Data source isolation on dataset switch.
+  - Conversational follow-ups (LIMIT adjustment, sort order reversal, count aggregation, filter refinement).
+  - Multi-session registry in `ConversationManager`.
+  - End-to-end multi-turn pipeline execution.
+- `tests/test_backend_api.py` (12 tests):
+  - Database selection, schema inspection, sample prompts.
+  - Natural language querying across `ecommerce.db`, `company_hr.db`, and `healthcare.db`.
+  - Self-healing retry trace verification.
+  - Raw SQL read-only validation and destructive mutation blocking.
+  - Query plan explanation (`EXPLAIN QUERY PLAN`).
+  - Static frontend serving.
+- `tests/test_stage3_uploads.py` (7 tests):
+  - CSV and SQLite database uploads, sanitization, schema reflection, and ephemeral lifecycle cleanup.
+- `tests/test_stage2_advanced.py` (10 tests):
+  - Multi-table JOINs, aggregations, date arithmetic, ambiguity detection, and retry re-validation.
+- `tests/test_validator.py` (12 tests):
+  - AST safety checks, forbidden SQL blocking, multi-statement rejection.
+- `tests/test_database.py` (5 tests):
+  - SQLite read-only enforcement (`PRAGMA query_only = ON`) and schema summaries.
+- `tests/test_demo_mode.py` (2 tests):
+  - Deterministic offline demo mode compliance.
+- `tests/test_pipeline.py` (5 tests):
+  - Bounded retries, error sanitization, and pipeline trace recording.
 
 ---
 
-## 📂 Project Architecture
+## 📂 Project Structure
 
 ```
 New folder (5)/
-├── app.py                           # Streamlit analytics dashboard (Stage 3)
+├── app.py                           # Streamlit analytics dashboard (Stage 4)
 ├── requirements.txt                 # Project dependencies
-├── .env.example                     # Template for environment secrets
-├── .gitignore                       # Git ignore rules
-├── README.md                        # Project documentation
-├── src/
-│   ├── __init__.py                  # Package exports
-│   ├── upload_handler.py            # Stage 3: CSV & SQLite validation, ingestion, and temp cleanup
-│   ├── models.py                    # SQLAlchemy models (customers, products, orders, order_items)
-│   ├── database.py                  # SQLite read-only connection, schema inspection, timeout management
-│   ├── seeder.py                    # Synthetic business dataset generator
-│   ├── schema_context.py            # Dynamic schema context, join guides, semantic validation & ambiguity
-│   ├── validator.py                 # Robust SQL AST validator using sqlglot
-│   ├── llm_adapter.py               # Configurable structured adapters (DemoMode, Gemini, OpenAI)
-│   ├── logger.py                    # Diagnostic observability logger with secrets redaction
-│   └── pipeline.py                  # Execution pipeline with bounded self-healing retry loop
-└── tests/
-    ├── __init__.py
-    ├── test_stage3_uploads.py       # Stage 3: CSV/SQLite uploads, validation, sanitization & lifecycle (7 tests)
-    ├── test_stage2_advanced.py      # Stage 2: Joins, dates, ambiguity, retry revalidation (10 tests)
-    ├── test_validator.py            # SQL safety gates and forbidden operations (12 tests)
-    ├── test_database.py             # DB schema, records, and read-only mode (5 tests)
-    ├── test_demo_mode.py            # Deterministic demo queries (2 tests)
-    └── test_pipeline.py             # Bounded retries, error sanitization, and revalidation (5 tests)
+├── .env.example                     # Environment secrets template
+├── README.md                        # Documentation
+├── data/                            # Multi-domain SQLite databases
+│   ├── business.db                  # Synthetic business database
+│   ├── ecommerce.db                 # E-commerce store database
+│   ├── company_hr.db                # HR & analytics database
+│   └── healthcare.db                # Healthcare & hospital database
+├── backend/                         # FastAPI backend architecture
+│   ├── main.py                      # FastAPI app & REST endpoints
+│   ├── db_manager.py                # Database connection & schema inspection
+│   ├── sql_agent.py                 # Autonomous text-to-SQL engine with self-healing
+│   └── seed_data.py                 # Multi-domain dataset seeding script
+├── frontend/                        # Responsive web dashboard
+│   ├── index.html                   # Modern UI layout
+│   ├── styles.css                   # Responsive theme & glassmorphic styling
+│   └── app.js                       # Frontend client & Chart.js integration
+├── src/                             # Core Python analyst engine
+│   ├── __init__.py                  # Public exports
+│   ├── conversation.py              # Stage 4: Multi-turn session & context manager
+│   ├── pipeline.py                  # Self-healing execution pipeline
+│   ├── llm_adapter.py               # Adapters (DemoMode, Gemini, OpenAI) with delta logic
+│   ├── schema_context.py            # Dynamic schema context & ambiguity detection
+│   ├── validator.py                 # AST safety validator (sqlglot)
+│   ├── upload_handler.py            # CSV & SQLite upload handlers
+│   ├── database.py                  # SQLite database manager & sandboxing
+│   ├── models.py                    # SQLAlchemy ORM models
+│   ├── seeder.py                    # Sample database seeder
+│   └── logger.py                    # Observability logging with secrets redaction
+└── tests/                           # 64 Automated Unit & Integration Tests
+    ├── test_stage4_conversation.py  # Conversational analytics tests (11 tests)
+    ├── test_backend_api.py          # FastAPI endpoints & multi-domain tests (12 tests)
+    ├── test_stage3_uploads.py       # File uploads & sanitization (7 tests)
+    ├── test_stage2_advanced.py      # Joins, dates, ambiguity, retries (10 tests)
+    ├── test_validator.py            # SQL AST validation (12 tests)
+    ├── test_database.py             # Database sandboxing (5 tests)
+    ├── test_demo_mode.py            # Offline demo mode (2 tests)
+    └── test_pipeline.py             # Pipeline retries & error handling (5 tests)
 ```
-

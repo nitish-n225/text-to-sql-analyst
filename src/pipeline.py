@@ -94,6 +94,9 @@ class PipelineResult:
     clarification_question: Optional[str] = None
     clarification_options: List[str] = field(default_factory=list)
     error_category: Optional[str] = None
+    # Stage 4 additions
+    delta_explanation: Optional[str] = None
+    turn_id: Optional[int] = None
 
 
 def generate_plotly_chart(df: pd.DataFrame, question: str) -> Optional[go.Figure]:
@@ -160,28 +163,49 @@ def generate_plotly_chart(df: pd.DataFrame, question: str) -> Optional[go.Figure
 
 
 class TextToSqlPipeline:
-    def __init__(self, db_manager: DatabaseManager, llm_adapter: BaseLLMAdapter):
+    def __init__(
+        self,
+        db_manager: DatabaseManager,
+        llm_adapter: BaseLLMAdapter,
+        schema_builder: Optional[SchemaContextBuilder] = None,
+        max_retries: int = MAX_CORRECTION_RETRIES,
+        session: Optional[Any] = None
+    ):
         self.db_manager = db_manager
         self.llm_adapter = llm_adapter
-        self.schema_builder = SchemaContextBuilder(db_manager)
-        self.max_retries = MAX_CORRECTION_RETRIES
+        self.schema_builder = schema_builder or SchemaContextBuilder(db_manager)
+        self.max_retries = max_retries
+        self.session = session
 
-    def run(self, question: str, induce_error_first_attempt: bool = False) -> PipelineResult:
+    def run(
+        self,
+        question: str,
+        induce_error_first_attempt: bool = False,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        session: Optional[Any] = None
+    ) -> PipelineResult:
         """
         Executes the advanced Text-to-SQL pipeline:
         1. Checks for question ambiguity upfront.
-        2. Builds enriched schema context.
+        2. Builds enriched schema context and resolves conversational follow-up context.
         3. Generates structured output via LLM adapter.
         4. Validates AST safety and semantic schema references.
         5. Executes read-only query in database sandbox.
         6. On recoverable error: triggers bounded self-healing retry (max 2 retries).
-        7. Synthesizes summary, assumptions, explanation, and Plotly visualization.
+        7. Synthesizes summary, assumptions, explanation, delta explanation, and Plotly visualization.
         """
         overall_start = time.time()
         observability.log_event("QUERY_RECEIVED", f"Received query: '{question}'", {"provider": self.llm_adapter.label})
 
+        active_session = session if session is not None else self.session
+        if conversation_history is None and active_session is not None:
+            conversation_history = active_session.get_context_for_prompt(max_turns=3)
+
         # 1. Check for question ambiguity
-        is_ambiguous, clar_question, clar_options = self.schema_builder.detect_ambiguity(question)
+        is_ambiguous, clar_question, clar_options = self.schema_builder.detect_ambiguity(
+            question,
+            has_context=bool(conversation_history)
+        )
         if is_ambiguous:
             observability.log_event("AMBIGUITY_DETECTED", f"Ambiguous question detected: '{question}'")
             total_duration_ms = round((time.time() - overall_start) * 1000, 2)
@@ -203,7 +227,9 @@ class TextToSqlPipeline:
                 needs_clarification=True,
                 clarification_question=clar_question,
                 clarification_options=clar_options,
-                error_category="AMBIGUITY_DETECTED"
+                error_category="AMBIGUITY_DETECTED",
+                delta_explanation=None,
+                turn_id=None
             )
 
         # 2. Build rich schema context
@@ -218,6 +244,7 @@ class TextToSqlPipeline:
         last_exec_time = 0.0
         final_explanation = ""
         final_assumptions: List[str] = []
+        final_delta_explanation: Optional[str] = None
         current_sql = ""
         last_error_category = None
 
@@ -241,11 +268,22 @@ class TextToSqlPipeline:
                         assumptions=["Self-healing retry demonstration"]
                     )
                 else:
-                    llm_out = self.llm_adapter.generate_structured(
-                        question=question,
-                        schema_prompt=schema_prompt,
-                        error_feedback=error_feedback
-                    )
+                    try:
+                        llm_out = self.llm_adapter.generate_structured(
+                            question=question,
+                            schema_prompt=schema_prompt,
+                            error_feedback=error_feedback,
+                            conversation_history=conversation_history
+                        )
+                    except TypeError as te:
+                        if "conversation_history" in str(te):
+                            llm_out = self.llm_adapter.generate_structured(
+                                question=question,
+                                schema_prompt=schema_prompt,
+                                error_feedback=error_feedback
+                            )
+                        else:
+                            raise
             except Exception as e:
                 err_msg = str(e)
                 sanitized_model_err = sanitize_error_context(err_msg)
@@ -287,12 +325,15 @@ class TextToSqlPipeline:
                     needs_clarification=True,
                     clarification_question=llm_out.clarification_question,
                     clarification_options=llm_out.clarification_options,
-                    error_category="AMBIGUITY_DETECTED"
+                    error_category="AMBIGUITY_DETECTED",
+                    delta_explanation=None,
+                    turn_id=None
                 )
 
             current_sql = llm_out.sql or ""
             final_explanation = llm_out.explanation
             final_assumptions = llm_out.assumptions
+            final_delta_explanation = getattr(llm_out, "delta_explanation", None)
 
             # 3. AST Safety Validation
             val_res = validate_sql(current_sql)
@@ -394,6 +435,22 @@ class TextToSqlPipeline:
 
         observability.log_event("PIPELINE_COMPLETED", f"Pipeline finished: success={success}, attempts={len(trace)}")
 
+        turn_id = None
+        if active_session is not None:
+            cols = list(successful_df.columns) if (success and successful_df is not None) else []
+            recorded_turn = active_session.add_turn(
+                question=question,
+                sql=current_sql if success else "",
+                explanation=final_explanation,
+                delta_explanation=final_delta_explanation,
+                success=success,
+                rows_count=len(successful_df) if (success and successful_df is not None) else 0,
+                columns=cols,
+                summary=summary,
+                error_message=final_err
+            )
+            turn_id = recorded_turn.turn_id
+
         return PipelineResult(
             success=success,
             question=question,
@@ -413,5 +470,7 @@ class TextToSqlPipeline:
             needs_clarification=False,
             clarification_question=None,
             clarification_options=[],
-            error_category=final_cat
+            error_category=final_cat,
+            delta_explanation=final_delta_explanation,
+            turn_id=turn_id
         )
